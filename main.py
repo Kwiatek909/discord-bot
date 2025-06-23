@@ -11,7 +11,7 @@ async def on_ready():
     # Ustawianie statusu z samym tekstem (bez "Gra w")
     await bot.change_presence(
         status=discord.Status.online,
-        activity=discord.CustomActivity(name="⚠️ Przerwa Techniczna ⚠️")
+        activity=discord.CustomActivity(name="Przerwa Techniczna ⚠️")
     )
 
 @bot.command()
@@ -23,7 +23,7 @@ async def ping(ctx):
 @bot.command()
 async def status(ctx, *, new_status):
     """Zmienia status bota"""
-    await bot.change_presence(activity=discord.Game(name=new_status))
+    await bot.change_presence(activity=discord.CustomActivity(name=new_status))
     await ctx.send(f'Status zmieniony na: {new_status}')
 
 bot.run(os.getenv('DISCORD_TOKEN'))
