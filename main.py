@@ -14,6 +14,12 @@ async def on_ready():
         activity=discord.CustomActivity(name="Przerwa Techniczna ⚠️")
     )
 
+@command_name.error
+    async def command_name_error(ctx, error):
+        if isinstance(error, commands.CommandOnCooldown):
+            em = discord.Embed(title=f"Odczekaj chwilę!",description=f"Spróbuj ponownie za {error.retry_after:.2f}s.", color=color_code_here)
+            await ctx.send(embed=em)
+
 @bot.command()
 @commands.cooldown(1,15,commands.BucketType.user)
 async def ping(ctx):
