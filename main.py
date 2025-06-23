@@ -15,6 +15,7 @@ async def on_ready():
     )
 
 @bot.command()
+@commands.cooldown(1,15,commands.BucketType.user)
 async def ping(ctx):
     ping_ms = round(bot.latency * 1000)
     await ctx.send(f'Ping poprawny {ping_ms}ms')
