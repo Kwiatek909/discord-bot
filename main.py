@@ -26,7 +26,7 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.CommandNotFound):
         await ctx.send('Nie istnieje taka komenda.')
     else:
-        raise error  # jeśli to inny błąd, wyświetl go w konsoli
+        raise error
 
 @bot.command()
 async def status(ctx, *, new_status):
