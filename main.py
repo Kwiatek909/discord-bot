@@ -8,11 +8,11 @@ import atexit
 bot = commands.Bot(
     command_prefix=';',
     intents=discord.Intents.all(),
-    help_command=None  # Wyłącz domyślną komendę pomocy
+    help_command=None
 )
 
 # --- Zabezpieczenie przed podwójnym uruchomieniem ---
-LOCK_FILE = "/tmp/discord_bot.lock"  # Ścieżka dla Render.com
+LOCK_FILE = "/tmp/discord_bot.lock"
 
 def cleanup():
     """Usuń plik blokady przy wyjściu"""
@@ -20,31 +20,31 @@ def cleanup():
         os.remove(LOCK_FILE)
 
 if os.path.exists(LOCK_FILE):
-    print("🛑 Bot jest już uruchomiony! Zamykanie duplikatu...")
+    print("Bot jest już uruchomiony! Zamykanie duplikatu...")
     sys.exit(0)
 else:
     with open(LOCK_FILE, "w") as f:
-        f.write(str(os.getpid()))  # Zapisz PID procesu
-    atexit.register(cleanup)  # Sprzątanie przy wyjściu
+        f.write(str(os.getpid()))
+    atexit.register(cleanup)
 
 # --- Eventy ---
 @bot.event
 async def on_ready():
-    print(f"✅ Bot {bot.user} działa (PID: {os.getpid()})")
+    print(f"Bot {bot.user} działa (PID: {os.getpid()})")
     await bot.change_presence(
-        activity=discord.CustomActivity(name="Gotowy do działania!"),
+        activity=discord.CustomActivity(name="Gotowy do działania"),
         status=discord.Status.online
     )
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(f"⏳ Poczekaj {round(error.retry_after, 1)}s przed ponownym użyciem!")
+        await ctx.send(f"Poczekaj {round(error.retry_after, 1)} sekund przed ponownym użyciem.")
     elif isinstance(error, commands.CommandNotFound):
-        await ctx.send("❌ Nieznana komenda! Wpisz `;pomoc`")
+        await ctx.send("Nieznana komenda. Wpisz ';pomoc'")
     else:
-        print(f"❗ Błąd: {error}")
-        await ctx.send("⚠️ Wystąpił błąd!")
+        print(f"Błąd: {error}")
+        await ctx.send("Wystąpił błąd.")
 
 # --- Komendy ---
 @bot.command()
@@ -52,31 +52,31 @@ async def on_command_error(ctx, error):
 async def ping(ctx):
     """Sprawdź ping bota"""
     latency = round(bot.latency * 1000)
-    await ctx.send(f"🏓 Pong! `{latency}ms`")
+    await ctx.send(f"Ping: {latency}ms")
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def status(ctx, *, text: str):
     """Zmień status bota (tylko admin)"""
     await bot.change_presence(activity=discord.CustomActivity(name=text))
-    await ctx.send(f"✅ Status ustawiony na: `{text}`")
+    await ctx.send(f"Status zmieniony na: {text}")
 
 @bot.command()
 async def pomoc(ctx):
-    """Pokazuje tę wiadomość"""
+    """Pokazuje listę komend"""
     embed = discord.Embed(
-        title="📜 Dostępne komendy",
-        description=f"Prefix: `{bot.command_prefix}`",
-        color=0x00ff00
+        title="Dostępne komendy",
+        description=f"Prefix: {bot.command_prefix}",
+        color=0xFFFFFF  # Biały kolor
     )
-    embed.add_field(name="🏓 ping", value="Sprawdź opóźnienie bota", inline=False)
-    embed.add_field(name="🔧 status [tekst]", value="Zmień status (admin)", inline=False)
+    embed.add_field(name="ping", value="Sprawdź opóźnienie bota", inline=False)
+    embed.add_field(name="status [tekst]", value="Zmień status (tylko admin)", inline=False)
     await ctx.send(embed=embed)
 
 # --- Uruchomienie ---
 try:
     bot.run(os.getenv('DISCORD_TOKEN'))
 except Exception as e:
-    print(f"🚨 Krytyczny błąd: {e}")
-    cleanup()  # Usuń plik blokady przy crashu
+    print(f"Krytyczny błąd: {e}")
+    cleanup()
     sys.exit(1)
