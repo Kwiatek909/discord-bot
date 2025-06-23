@@ -1,6 +1,11 @@
 import discord
 from discord.ext import commands
 import os
+import sys
+
+if discord.utils.get(sys.modules.values(), name='__main__'):
+    print("Bot jest już uruchomiony! Zamykanie duplikatu...")
+    sys.exit(0)
 
 # Tworzenie bota
 bot = commands.Bot(command_prefix=';', intents=discord.Intents.all())
