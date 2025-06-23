@@ -16,7 +16,8 @@ async def on_ready():
 
 @bot.command()
 async def ping(ctx):
-    await ctx.send('Pong!')
+    ping_ms = round(bot.latency * 1000)
+    await ctx.send(f'Ping poprawny {ping_ms}ms')
 
 # Komenda do zmiany statusu (opcjonalna)
 @bot.command()
