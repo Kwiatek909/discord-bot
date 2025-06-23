@@ -8,10 +8,10 @@ bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
 async def on_ready():
     print(f'Bot {bot.user} jest gotowy!')
     
-    # Ustawianie statusu bota
+    # Ustawianie statusu z samym tekstem (bez "Gra w")
     await bot.change_presence(
-        status=discord.Status.online,  # online, idle, dnd, invisible
-        activity=discord.Game("⚠️ Przerwa Techniczna ⚠️")  # Co bot "gra"
+        status=discord.Status.online,
+        activity=discord.CustomActivity(name="⚠️ Przerwa Techniczna ⚠️")
     )
 
 @bot.command()
