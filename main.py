@@ -11,7 +11,7 @@ async def on_ready():
     # Ustawianie statusu bota
     await bot.change_presence(
         status=discord.Status.online,  # online, idle, dnd, invisible
-        activity=discord.Game(name="Pomocny Bot")  # Co bot "gra"
+        activity=discord.Game("⚠️ Przerwa Techniczna ⚠️")  # Co bot "gra"
     )
 
 @bot.command()
