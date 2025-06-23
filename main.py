@@ -16,22 +16,6 @@ bot = commands.Bot(
 CHANNEL_ID_PING = "1246818926604582984"  # Kanał do wysyłania pingów co 10 minut
 # CHANNEL_ID_LOGS = "123..."  # Przykład: możesz dodać inne kanały dla różnych funkcji
 
-# --- Zabezpieczenie przed podwójnym uruchomieniem ---
-LOCK_FILE = "/tmp/discord_bot.lock"
-
-def cleanup():
-    """Usuń plik blokady przy wyjściu"""
-    if os.path.exists(LOCK_FILE):
-        os.remove(LOCK_FILE)
-
-if os.path.exists(LOCK_FILE):
-    print("Bot jest już uruchomiony! Zamykanie duplikatu...")
-    sys.exit(0)
-else:
-    with open(LOCK_FILE, "w") as f:
-        f.write(str(os.getpid()))
-    atexit.register(cleanup)
-
 # --- Funkcja do wysyłania pingów co 10 minut ---
 async def send_ping():
     await bot.wait_until_ready()
