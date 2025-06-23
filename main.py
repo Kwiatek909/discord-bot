@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 import sys
 import atexit
+import asyncio
 
 # Konfiguracja bota
 bot = commands.Bot(
@@ -10,6 +11,9 @@ bot = commands.Bot(
     intents=discord.Intents.all(),
     help_command=None
 )
+
+# --- Zmień to na ID swojego kanału! ---
+CHANNEL_ID = "TWÓJ_CHANNEL_ID"  # Wklej tutaj ID kanału (np. "123456789012345678")
 
 # --- Zabezpieczenie przed podwójnym uruchomieniem ---
 LOCK_FILE = "/tmp/discord_bot.lock"
@@ -27,6 +31,19 @@ else:
         f.write(str(os.getpid()))
     atexit.register(cleanup)
 
+# --- Funkcja do wysyłania pingów co 10 minut ---
+async def send_ping():
+    await bot.wait_until_ready()
+    channel = bot.get_channel(int(CHANNEL_ID))
+    if channel:
+        while not bot.is_closed():
+            try:
+                await channel.send("Ping! (utrzymanie aktywności)")
+                print("Wysłano ping na kanał!")
+            except Exception as e:
+                print(f"Błąd przy wysyłaniu pinga: {e}")
+            await asyncio.sleep(600)  # 10 minut = 600 sekund
+
 # --- Eventy ---
 @bot.event
 async def on_ready():
@@ -35,6 +52,8 @@ async def on_ready():
         activity=discord.CustomActivity(name="Gotowy do działania"),
         status=discord.Status.online
     )
+    # Uruchomienie tła (ping co 10 minut)
+    bot.loop.create_task(send_ping())
 
 @bot.event
 async def on_command_error(ctx, error):
