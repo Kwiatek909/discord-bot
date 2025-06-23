@@ -20,6 +20,12 @@ async def ping(ctx):
     ping_ms = round(bot.latency * 1000)
     await ctx.send(f'Ping poprawny {ping_ms}ms')
 
+@client.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send('komenda jest na cooldownie')
+
+
 # Komenda do zmiany statusu (opcjonalna)
 @bot.command()
 async def status(ctx, *, new_status):
