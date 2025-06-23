@@ -12,8 +12,9 @@ bot = commands.Bot(
     help_command=None
 )
 
-# --- Zmień to na ID swojego kanału! ---
-CHANNEL_ID = "TWÓJ_CHANNEL_ID"  # Wklej tutaj ID kanału (np. "123456789012345678")
+# --- ID kanałów (zmień te wartości!) ---
+CHANNEL_ID_PING = "1246818926604582984"  # Kanał do wysyłania pingów co 10 minut
+# CHANNEL_ID_LOGS = "123..."  # Przykład: możesz dodać inne kanały dla różnych funkcji
 
 # --- Zabezpieczenie przed podwójnym uruchomieniem ---
 LOCK_FILE = "/tmp/discord_bot.lock"
@@ -34,12 +35,12 @@ else:
 # --- Funkcja do wysyłania pingów co 10 minut ---
 async def send_ping():
     await bot.wait_until_ready()
-    channel = bot.get_channel(int(CHANNEL_ID))
+    channel = bot.get_channel(int(CHANNEL_ID_PING))  # Używa CHANNEL_ID_PING
     if channel:
         while not bot.is_closed():
             try:
                 await channel.send("Ping! (utrzymanie aktywności)")
-                print("Wysłano ping na kanał!")
+                print(f"Wysłano ping na kanał {CHANNEL_ID_PING}!")
             except Exception as e:
                 print(f"Błąd przy wysyłaniu pinga: {e}")
             await asyncio.sleep(600)  # 10 minut = 600 sekund
