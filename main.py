@@ -12,7 +12,7 @@ async def on_ready():
 
     await bot.change_presence(
         status=discord.Status.online,
-        activity=discord.CustomActivity(name="Przerwa Techniczna ⚠️")
+        activity=discord.CustomActivity(name="Przerwa Techniczna")
     )
 
 # Komenda ping z cooldownem
