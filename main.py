@@ -1,472 +1,415 @@
 import discord
 from discord.ext import commands
-import os
-import sys
-import atexit
-from flask import Flask
-import logging
-import threading
+from discord import app_commands
+import asyncio
+from typing import Optional
+from datetime import datetime, timezone
+import psycopg2
 
-# Konfiguracja logowania
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+DB_URL = "postgresql://postgres:LSsnOUgoaBdfALARJNHuOfdbrQYcfCup@postgres.railway.internal:5432/railway"
 
+def get_conn():
+    return psycopg2.connect(DB_URL)
 
-class RegulaminModal(discord.ui.Modal, title='Propozycja zmiany regulaminu'):
+def hex_color(hex_str):
+    return int(hex_str.lstrip('#'), 16)
 
-    def __init__(self):
-        super().__init__(timeout=300)
-        self.temat = discord.ui.TextInput(
-            label='Temat zmiany',
-            placeholder='np. Punkt za Pole Position',
-            required=True,
-            max_length=100)
-        self.powod = discord.ui.TextInput(
-            label='Powód zmiany',
-            placeholder='np. Dodatkowy punkt dla czołówki',
-            required=True,
-            max_length=200)
-        self.uzasadnienie = discord.ui.TextInput(
-            label='Szczegółowe uzasadnienie',
-            style=discord.TextStyle.paragraph,
-            placeholder=
-            'Wyjaśnij dlaczego ta zmiana powinna zostać wprowadzona...',
-            required=True,
-            max_length=1000)
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
 
-        self.add_item(self.temat)
-        self.add_item(self.powod)
-        self.add_item(self.uzasadnienie)
+bot = commands.Bot(command_prefix=';', intents=intents, help_command=None)
+tree = bot.tree
 
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            embed = discord.Embed(
-                title="Zmiana Regulacji",  # Stały tytuł
-                color=0xFF8C00,
-                timestamp=discord.utils.utcnow())
-
-            embed.set_author(
-                name=interaction.user.display_name,
-                icon_url=interaction.user.avatar.url if interaction.user.avatar
-                else interaction.user.default_avatar.url)
-
-            # Prostsze formatowanie bez tagów i automatycznych podpisów
-            embed.add_field(name="Co należy zmienić?",
-                            value=self.temat.value,
-                            inline=False)
-            embed.add_field(name="Powód zmiany",
-                            value=self.powod.value,
-                            inline=False)
-            embed.add_field(name="Uzasadnienie",
-                            value=self.uzasadnienie.value,
-                            inline=False)
-
-            embed.set_thumbnail(
-                url=
-                "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
-            )
-            embed.set_footer(text="Czekaj na wynik twojego formularza"
-                             )  # Taka sama stopka jak w innych
-
-            await interaction.response.send_message(
-                "✅ Twoja propozycja zmiany regulaminu została wysłana!",
-                ephemeral=True)
-            await interaction.channel.send(embed=embed)
-
-        except Exception as e:
-            await self.on_error(interaction, e)
-
-    async def on_error(self, interaction: discord.Interaction,
-                       error: Exception):
-        await interaction.response.send_message(
-            "❌ Wystąpił błąd podczas wysyłania formularza.", ephemeral=True)
-        logger.error(f"Błąd w formularzu regulaminu: {error}")
-
-
-class ZglosModal(discord.ui.Modal, title='Zgłoś skład'):
-
-    def __init__(self):
-        super().__init__(timeout=300)
-        self.zglos_sklad = discord.ui.TextInput(
-            label='Zespół',
-            placeholder='Oracle Red Bull Racing RBPT',
-            required=True,
-            max_length=100)
-        self.kierowcy = discord.ui.TextInput(
-            label='Kierowcy',
-            placeholder='Person #99, Orzelke #53',
-            required=True,
-            max_length=200)
-        self.akademia = discord.ui.TextInput(label='Akademia',
-                                             placeholder='RedBull',
-                                             required=True,
-                                             max_length=100)
-        self.grand_prix_dywizja = discord.ui.TextInput(
-            label='Grand Prix i Dywizja',
-            placeholder='R3 - GP Japonia - S6, F1',
-            required=True,
-            max_length=150)
-
-        self.add_item(self.zglos_sklad)
-        self.add_item(self.kierowcy)
-        self.add_item(self.akademia)
-        self.add_item(self.grand_prix_dywizja)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            embed = discord.Embed(title="Zgłoszenie składu",
-                                  color=0xFF8C00,
-                                  timestamp=discord.utils.utcnow())
-
-            embed.set_author(
-                name=interaction.user.display_name,
-                icon_url=interaction.user.avatar.url if interaction.user.avatar
-                else interaction.user.default_avatar.url)
-
-            embed.add_field(name="Zespół",
-                            value=self.zglos_sklad.value,
-                            inline=False)
-            embed.add_field(name="Kierowcy",
-                            value=self.kierowcy.value,
-                            inline=False)
-            embed.add_field(name="Akademia",
-                            value=self.akademia.value,
-                            inline=False)
-
-            gp_dywizja = self.grand_prix_dywizja.value.split(',')
-            embed.add_field(name="Grand Prix",
-                            value=gp_dywizja[0].strip(),
-                            inline=False)
-            embed.add_field(
-                name="Dywizja",
-                value=gp_dywizja[1].strip() if len(gp_dywizja) > 1 else "N/A",
-                inline=False)
-
-            embed.set_thumbnail(
-                url=
-                "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
-            )
-            embed.set_footer(text="Czekaj na wynik twojego zgłoszenia")
-
-            await interaction.response.send_message(
-                "✅ Twoje zgłoszenie zostało wysłane!", ephemeral=True)
-            channel = interaction.guild.get_channel(
-                123456789)  # ZASTĄP PRAWDZIWYM ID KANAŁU
-            if channel:
-                await channel.send(embed=embed)
-            else:
-                await interaction.followup.send(embed=embed)
-        except Exception as e:
-            await self.on_error(interaction, e)
-
-    async def on_error(self, interaction: discord.Interaction,
-                       error: Exception):
-        await interaction.response.send_message(
-            "❌ Wystąpił błąd podczas wysyłania formularza.", ephemeral=True)
-        logger.error(f"Błąd w modalnym formularzu zgłoszenia: {error}")
-
-
-class OdwolanieModal(discord.ui.Modal, title='Odwołanie od kary'):
-
-    def __init__(self):
-        super().__init__(timeout=300)
-        self.dane_kierowcy = discord.ui.TextInput(label='Dane Kierowcy',
-                                                  placeholder='Maklini #95',
-                                                  required=True,
-                                                  max_length=100)
-        self.grand_prix = discord.ui.TextInput(label='Grand Prix',
-                                               placeholder='S3-R8-GP Holandii',
-                                               required=True,
-                                               max_length=100)
-        self.zamieszani = discord.ui.TextInput(
-            label='Zamieszani',
-            placeholder='Kamil #32, Mesterek #27, Stravbo #12',
-            required=True,
-            max_length=200)
-        self.tresc = discord.ui.TextInput(
-            label='Treść',
-            placeholder='Szanowne FIA, Witam was serdecznie...',
-            style=discord.TextStyle.paragraph,
-            required=True,
-            max_length=1000)
-
-        self.add_item(self.dane_kierowcy)
-        self.add_item(self.grand_prix)
-        self.add_item(self.zamieszani)
-        self.add_item(self.tresc)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        try:
-            embed = discord.Embed(title="Odwołanie od kary",
-                                  color=0xFF8C00,
-                                  timestamp=discord.utils.utcnow())
-
-            embed.set_author(
-                name=interaction.user.display_name,
-                icon_url=interaction.user.avatar.url if interaction.user.avatar
-                else interaction.user.default_avatar.url)
-
-            embed.add_field(name="Dane Kierowcy",
-                            value=self.dane_kierowcy.value,
-                            inline=False)
-            embed.add_field(name="Grand Prix",
-                            value=self.grand_prix.value,
-                            inline=False)
-            embed.add_field(name="Zamieszani",
-                            value=self.zamieszani.value,
-                            inline=False)
-            embed.add_field(name="Treść", value=self.tresc.value, inline=False)
-
-            embed.set_thumbnail(
-                url=
-                "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
-            )
-            embed.set_footer(text="Czekaj na wynik twojego formularza")
-
-            await interaction.response.send_message(
-                "✅ Twoje odwołanie zostało wysłane!", ephemeral=True)
-            channel = interaction.guild.get_channel(
-                123456789)  # ZASTĄP PRAWDZIWYM ID KANAŁU
-            if channel:
-                await channel.send(embed=embed)
-            else:
-                await interaction.followup.send(embed=embed)
-        except Exception as e:
-            await self.on_error(interaction, e)
-
-    async def on_error(self, interaction: discord.Interaction,
-                       error: Exception):
-        await interaction.response.send_message(
-            "❌ Wystąpił błąd podczas wysyłania formularza.", ephemeral=True)
-        logger.error(f"Błąd w modalnym formularzu odwołania: {error}")
-
-
-# Serwer Flask dla UptimeRobot
-app = Flask(__name__)
-
-
-@app.route('/')
-def home():
-    return "Bot działa 24/7!"
-
-
-def keep_alive():
-
-    def run_flask():
-        try:
-            app.run(host='0.0.0.0', port=3000, debug=False, use_reloader=False)
-        except Exception as e:
-            logger.error(f"Błąd Flaska: {e}")
-
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-
-
-# Konfiguracja bota
-bot = commands.Bot(command_prefix=';',
-                   intents=discord.Intents.all(),
-                   help_command=None)
-
-# --- Zabezpieczenie przed podwójnym uruchomieniem ---
-LOCK_FILE = "/tmp/discord_bot.lock"
-
-
-def cleanup():
-    if os.path.exists(LOCK_FILE):
-        try:
-            os.remove(LOCK_FILE)
-            logger.info("Plik blokady usunięty")
-        except Exception as e:
-            logger.error(f"Błąd podczas usuwania pliku blokady: {e}")
-
-
-if os.path.exists(LOCK_FILE):
-    try:
-        with open(LOCK_FILE, "r") as f:
-            old_pid = int(f.read().strip())
-        if os.path.exists(
-                f"/proc/{old_pid}"):  # Sprawdź czy proces istnieje (Linux)
-            print(
-                f"Bot jest już uruchomiony! (PID: {old_pid}) Zamykanie duplikatu..."
-            )
-            sys.exit(0)
-        else:
-            os.remove(LOCK_FILE)
-    except Exception as e:
-        print(f"Błąd przy sprawdzaniu pliku blokady: {e}")
-        if os.path.exists(LOCK_FILE):
-            os.remove(LOCK_FILE)
-
-with open(LOCK_FILE, "w") as f:
-    f.write(str(os.getpid()))
-atexit.register(cleanup)
-
-
-# --- Eventy i komendy ---
 @bot.event
 async def on_ready():
-    logger.info(f"Bot {bot.user} działa!")
-    await bot.change_presence(
-        activity=discord.CustomActivity(name="Przerwa Techniczna ⚠️"),
-        status=discord.Status.online)
+    await tree.sync()
+    print(f'{bot.user} jest online!')
+    activity = discord.Activity(type=discord.ActivityType.listening, name="/pomoc")
+    await bot.change_presence(activity=activity)
 
+@bot.command(name='ping')
+async def ping(ctx):
+    latency = round(bot.latency * 1000)
+    await ctx.send(f"Ping poprawny {latency} ms")
+    
+@tree.command(name="pomoc", description="Wyświetla kartę pomocy bota")
+async def pomoc_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="Pomoc",
+        description=(
+            "Oto karta pomocy bota!\n"
+            "Ostatnimi dniami hosting bota miał problemy i musieliśmy go zmienić.\n"
+            "W dalszym ciągu odbudowujemy komendy i wszystkie funkcje jakie miała stara wersja bota.\n"
+            "Niektóre funkcje mogą działać trochę inaczej.\n"
+            "Za wszelkie problemy przepraszamy!\n\n"
+            "**Komendy**\n"
+            "`Prefix - ;`\n"
+            "ping - pokazuje opóźnienie bota i sprawdza jego aktywność\n\n"
+            "`Ukośnik - /`\n"
+            "pomoc - wyświetla kartę pomocy bota\n"
+            "twitter - pozwala opublikować posta na kanale <#1282096776928559246>\n"
+            "news - pozwala opublikować posta na kanale <#1228665355832922173> (tylko admin)\n"
+            "rejestracja - udostępnia wynik rejestracji (tylko admin)\n"
+            "kontrakt - wysyła kontrakt do FIA"
+        ),
+        color=hex_color("#FFFFFF")
+    )
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandOnCooldown):
-        await ctx.send(
-            f"Poczekaj {round(error.retry_after, 1)} sekund przed ponownym użyciem."
-        )
-    elif isinstance(error, commands.CommandNotFound):
-        await ctx.send("Nieznana komenda. Wpisz ;pomoc")
-    else:
-        logger.error(f"Błąd: {error}")
-        await ctx.send("Wystąpił błąd.")
+    if interaction.guild and interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    embed.set_footer(text="Official Polish Racing Fortnite")
 
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@bot.command()
-async def twitter(ctx):
-    """Sends a Twitter post embed with optional attachment."""
-    await ctx.send("Click to fill out the form.")
-    await ctx.send_modal(TwitterModal())
-
-
-class TwitterModal(discord.ui.Modal, title='Nowy Post Twitter'):
-    title = discord.ui.TextInput(label='Tytuł', max_length=100, required=True)
-    content = discord.ui.TextInput(label='Treść',
-                                   style=discord.TextStyle.paragraph,
-                                   required=True)
-    attachment = discord.ui.TextInput(label='URL Zdjęcia (opcjonalne)',
-                                      required=False)
+# --- MODAL: Regulamin ---
+class RegulaminModal(discord.ui.Modal, title="Regulacja"):
+    zmiana = discord.ui.TextInput(
+        label="Jaką regulację byś zmienił lub dodał?",
+        placeholder="Np. Zmiana limitu okrążeń...",
+        min_length=5,
+        max_length=100
+    )
+    powod = discord.ui.TextInput(
+        label="Powód",
+        placeholder="Np. obecna regulacja jest zbyt surowa",
+        min_length=5,
+        max_length=100
+    )
+    uzasadnienie = discord.ui.TextInput(
+        label="Uzasadnienie",
+        style=discord.TextStyle.paragraph,
+        placeholder="Opisz dokładnie swoje zdanie (max 500 znaków)",
+        min_length=10,
+        max_length=500
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title=self.title.value,
-            description=self.content.value,
-            color=0x1DA1F2  # Light blue color, Twitter's brand color
+            title="Regulacja",
+            color=hex_color("#FFA500")
         )
+        embed.add_field(name="Jaką regulację byś zmienił lub dodał?", value=self.zmiana.value, inline=False)
+        embed.add_field(name="Powód", value=self.powod.value, inline=False)
+        embed.add_field(name="Uzasadnienie", value=self.uzasadnienie.value, inline=False)
+        embed.set_author(name=interaction.user.name, icon_url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/800px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png")
+        embed.set_footer(text="Official Polish Racing Fortnite")
+        embed.timestamp = datetime.now(timezone.utc)
 
-        if self.attachment.value:
-            embed.set_image(url=self.attachment.value)
-        # Replace CHANNEL_ID with the actual ID of the channel where you want to send the embed
-        channel = interaction.guild.get_channel(
-            1282096776928559246)  # ZASTĄP PRAWDZIWYM ID KANAŁU
-        if channel:
-            await channel.send(embed=embed)
-            await interaction.response.send_message(
-                "✅ Post na Twitterze został wysłany!", ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                "❌ Nie mogę znaleźć kanału!", ephemeral=True)
+        await interaction.response.send_message("Twoja regulacja została wysłana!", ephemeral=True)
 
+        KANAL_ID = 1284911511583719558  # <-- zamień na swój kanał docelowy
 
-# Don't forget to add your command handling code after defining the command and modal.
+        kanal_docelowy = interaction.guild.get_channel(KANAL_ID)
+        if kanal_docelowy:
+            await kanal_docelowy.send(embed=embed)
 
-
-@bot.command()
-@commands.cooldown(1, 15, commands.BucketType.user)
-async def ping(ctx):
-    """Sprawdź ping bota"""
-    latency = round(bot.latency * 1000)
-    await ctx.send(f"Ping: {latency}ms")
-
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def status(ctx, *, text: str):
-    """Zmień status bota"""
-    await bot.change_presence(activity=discord.CustomActivity(name=text))
-    await ctx.send(f"Status zmieniony na: {text}")
-
-
-@bot.command()
-async def pomoc(ctx):
-    """Pokazuje listę komend"""
-    embed = discord.Embed(title="📜 Dostępne komendy",
-                          description=f"Prefix: {bot.command_prefix}",
-                          color=0xFFFFFF)
-    embed.add_field(name="ping", value="Sprawdź opóźnienie bota", inline=False)
-    embed.add_field(name="status [tekst]",
-                    value="Zmień status (tylko admin)",
-                    inline=False)
-    embed.add_field(name="wnioski",
-                    value="Wyślij formularz wniosków",
-                    inline=False)
-    await ctx.send(embed=embed)
-
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def wnioski(ctx):
-    """Wyślij formularz wniosków do FIA"""
-    embed = discord.Embed(
-        title="Wnioski",
-        description=("Napisz oficjalny wniosek do FIA.\n"
-                     "Pamiętaj o wymogach podczas pisania.\n"
-                     "Kliknąć przycisk wyświetli ci się okienko\n"
-                     "w którym będziesz mógł stworzyć wniosek.\n"
-                     "Stosuję się do przykładów.\n\n"),
-        color=0xFF8C00)
-    embed.set_footer(
-        text="Wniosek może być odrzucony z powodu złej pisowni lub formatu.")
-    embed.set_thumbnail(
-        url=
-        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
+    
+# --- MODAL: Skład ---
+class SkladModal(discord.ui.Modal, title="Zgłoś skład"):
+    kierowcy = discord.ui.TextInput(
+        label="Kierowcy",
+        placeholder="Kamil #32, Niko #66",
+        min_length=5,
+        max_length=100
+    )
+    akademia = discord.ui.TextInput(
+        label="Akademia",
+        placeholder="Red Bull",
+        min_length=2,
+        max_length=50
+    )
+    grand_prix = discord.ui.TextInput(
+        label="Grand Prix",
+        placeholder="S3-R5-GP Japonii",
+        min_length=5,
+        max_length=50
+    )
+    dywizja = discord.ui.TextInput(
+        label="Dywizja",
+        placeholder="F1",
+        min_length=2,
+        max_length=2
     )
 
-    view = discord.ui.View(timeout=None)
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Zgłoszony skład",
+            color=hex_color("#FFA500")
+        )
+        embed.add_field(name="Kierowcy", value=self.kierowcy.value, inline=False)
+        embed.add_field(name="Akademia", value=self.akademia.value, inline=False)
+        embed.add_field(name="Grand Prix", value=self.grand_prix.value, inline=False)
+        embed.add_field(name="Dywizja", value=self.dywizja.value, inline=False)
+        embed.set_author(name=interaction.user.name, icon_url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/800px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png")
+        embed.set_footer(text="Official Polish Racing Fortnite")
+        embed.timestamp = datetime.now(timezone.utc)
 
-    odwolanie_button = discord.ui.Button(label="Odwołanie od kary",
-                                         style=discord.ButtonStyle.success,
-                                         emoji="📋")
-    regulamin_button = discord.ui.Button(label="Regulamin",
-                                         style=discord.ButtonStyle.success,
-                                         emoji="📄")
-    zgloszenie_button = discord.ui.Button(label="Zgłoś skład",
-                                          style=discord.ButtonStyle.success,
-                                          emoji="📋")
+        await interaction.response.send_message("Zgłoszenie składu zostało wysłane!", ephemeral=True)
 
-    async def odwolanie_callback(interaction):
+        # 🔁 TUTAJ PODAJ ID kanału, do którego ma zostać wysłany embed
+        KANAL_ID = 1284911511583719558  # <--- ZAMIEŃ NA PRAWDZIWE ID KANAŁU
+
+        kanal_docelowy = interaction.guild.get_channel(KANAL_ID)
+        if kanal_docelowy:
+            await kanal_docelowy.send(embed=embed)
+
+
+# --- MODAL: Odwołanie od kary ---
+class OdwolanieModal(discord.ui.Modal, title="Odwołanie od kary"):
+    kierowca = discord.ui.TextInput(
+        label="Dane Kierowcy",
+        placeholder="Makłini #95",
+        min_length=5,
+        max_length=40
+    )
+    grand_prix = discord.ui.TextInput(
+        label="Grand Prix",
+        placeholder="S3-R5-GP Japonii",
+        min_length=5,
+        max_length=50
+    )
+    zamieszani = discord.ui.TextInput(
+        label="Zamieszani",
+        placeholder="Kamil #32, Niko #66",
+        min_length=5,
+        max_length=50
+    )
+    tresc = discord.ui.TextInput(
+        label="Treść",
+        placeholder="Szanowne FIA, Witam was serdecznie...",
+        style=discord.TextStyle.paragraph,
+        min_length=5,
+        max_length=500
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title="Odwołanie od kary",
+            color=hex_color("#FFA500")
+        )
+        embed.add_field(name="Dane Kierowcy", value=self.kierowca.value, inline=False)
+        embed.add_field(name="Grand Prix", value=self.grand_prix.value, inline=False)
+        embed.add_field(name="Zamieszani", value=self.zamieszani.value, inline=False)
+        embed.add_field(name="Treść", value=self.tresc.value, inline=False)
+        embed.set_author(name=interaction.user.name, icon_url=interaction.user.display_avatar.url)
+        embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/800px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png")
+        embed.set_footer(text="Official Polish Racing Fortnite")
+        embed.timestamp = datetime.now(timezone.utc)
+
+        await interaction.response.send_message("Twoje odwołanie zostało złożone!", ephemeral=True)
+
+        # 🔁 TUTAJ PODAJ ID kanału, do którego ma zostać wysłany embed
+        KANAL_ID = 1284911511583719558  # <--- ZAMIEŃ NA PRAWDZIWE ID KANAŁU
+
+        kanal_docelowy = interaction.guild.get_channel(KANAL_ID)
+        if kanal_docelowy:
+            await kanal_docelowy.send(embed=embed)
+        else:
+            await interaction.followup.send("Nie znaleziono kanału docelowego!", ephemeral=True)
+
+# --- VIEW: Wnioski ---
+class WnioskiView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Odwołanie od kary", emoji="📩", style=discord.ButtonStyle.success, custom_id="wniosek_odwolanie")
+    async def odwolanie_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(OdwolanieModal())
 
-    async def regulamin_callback(interaction):
+    @discord.ui.button(label="Regulamin", emoji="📩", style=discord.ButtonStyle.success, custom_id="wniosek_regulamin")
+    async def regulamin_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RegulaminModal())
 
-    async def zgloszenie_callback(interaction):
-        await interaction.response.send_modal(ZglosModal())
-
-    odwolanie_button.callback = odwolanie_callback
-    regulamin_button.callback = regulamin_callback
-    zgloszenie_button.callback = zgloszenie_callback
-
-    view.add_item(odwolanie_button)
-    view.add_item(regulamin_button)
-    view.add_item(zgloszenie_button)
-
-    try:
-        await ctx.message.delete()
-    except:
-        pass
-
-    await ctx.send(embed=embed, view=view)
-
-
-# --- Uruchomienie ---
-if __name__ == '__main__':
-    logger.info("Uruchamianie bota...")
-    token = os.getenv('DISCORD_TOKEN')
-    if not token:
-        logger.critical(
-            "BRAK TOKENU! Ustaw zmienną środowiskową DISCORD_TOKEN")
-        sys.exit(1)
-
-    keep_alive()
-    try:
-        bot.run(token)
-    except discord.LoginFailure:
-        logger.critical("Nieprawidłowy token Discord!")
-    except Exception as e:
-        logger.critical(f"Krytyczny błąd: {e}")
-        cleanup()
-        sys.exit(1)
+    @discord.ui.button(label="Zgłoś skład", emoji="📩", style=discord.ButtonStyle.success, custom_id="wniosek_sklad")
+    async def sklad_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(SkladModal())
         
+# --- KOMENDA: Wnioski ---
+@bot.command(name='wnioski')
+@commands.has_permissions(administrator=True)
+async def wnioski(ctx):
+    embed = discord.Embed(
+        title="Wnioski",
+        description=(
+            "Napisz oficjalny wniosek do FIA.\n"
+            "Pamiętaj o wymogach podczas pisania.\n"
+            "Klikając przycisk, wyświetli ci się okienko,\n"
+            "w którym będziesz mógł stworzyć wniosek.\n"
+            "Stosuj się do przykładów."
+        ),
+        color=hex_color("#FF8C00")
+    )
+    embed.set_thumbnail(url="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/800px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png")
+    embed.set_footer(text="Official Polish Racing Fortnite")
+
+    await ctx.send(embed=embed, view=WnioskiView())
+    await ctx.message.delete()
+    
+# --- MODALE ---
+class TwitterModal(discord.ui.Modal, title="Twitter"):
+    tytul = discord.ui.TextInput(label="Tytuł", min_length=3, max_length=50)
+    tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, min_length=10, max_length=4000)
+
+    def __init__(self, image: Optional[discord.Attachment]):
+        super().__init__()
+        self.image = image
+
+    async def on_submit(self, interaction_modal: discord.Interaction):
+        user = interaction_modal.user
+        avatar_url = user.display_avatar.url
+        username = user.name
+        relative_time = discord.utils.format_dt(datetime.now(timezone.utc), style="R")
+
+        embed = discord.Embed(
+            title=self.tytul.value,
+            description=self.tresc.value,
+            color=hex_color("#0ff5ed")
+        )
+        embed.set_thumbnail(url="https://cdn.discordapp.com/emojis/1281938731175247955.webp?size=80")
+        embed.set_author(name=username, icon_url=avatar_url)
+        embed.set_footer(text="Wysłano")
+        embed.timestamp = datetime.now(timezone.utc)
+
+
+        if self.image and self.image.content_type.startswith("image"):
+            embed.set_image(url=self.image.url)
+
+        kanal = interaction_modal.guild.get_channel(1282096776928559246)
+        if kanal:
+            msg = await kanal.send(embed=embed)
+            await msg.add_reaction("❤️")
+            await interaction_modal.response.send_message("Pomyślnie opublikowano posta!", ephemeral=True)
+        else:
+            await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
+
+class NewsModal(discord.ui.Modal, title="News"):
+    tytul = discord.ui.TextInput(label="Tytuł", min_length=3, max_length=50)
+    tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, min_length=10, max_length=4000)
+
+    def __init__(self, image: Optional[discord.Attachment]):
+        super().__init__()
+        self.image = image
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed = discord.Embed(
+            title=self.tytul.value,
+            description=self.tresc.value,
+            color=hex_color("#ffcc00")
+        )
+        if self.image and self.image.content_type.startswith("image"):
+            embed.set_image(url=self.image.url)
+
+        await interaction.response.send_message(embed=embed)
+
+# --- KOMENDY ---
+@tree.command(name="kontrakt", description="Wyślij kontrakt do FIA!")
+@app_commands.describe(kierowca="kierowca", zespol="zespol", kontrakt="plik kontraktu")
+async def kontrakt_command(interaction: discord.Interaction, kierowca: discord.User, zespol: discord.Role, kontrakt: discord.Attachment):
+    szef_id = interaction.user.id
+    kanal = interaction.guild.get_channel(1246088962649362542)
+    if kanal:
+        await kanal.send(f"Szef Zespołu: <@{szef_id}>\nKierowca: {kierowca.mention}\nZespół: {zespol.mention}\n{kontrakt.url}")
+    await interaction.response.send_message("Pomyślnie wysłano kontrakt do FIA!", ephemeral=True)
+
+@tree.command(name="rejestracja", description="rejestracja")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(wynik="True/False", uzytkownik="użytkownik", opis="opis decyzji")
+async def rejestracja_command(interaction: discord.Interaction, wynik: str, uzytkownik: discord.Member, opis: str):
+    await interaction.response.send_message("Wykonano", ephemeral=True)
+
+    if wynik == "True":
+        embed = discord.Embed(
+            title=f"Wynik rejestracji - {uzytkownik.name}",
+            description=f"**Twoja rejestracja została rozpatrzona pozytywnie!**\n**Notatka:** {opis}",
+            color=hex_color("#00FF00")
+        )
+        embed.set_footer(text="Official Polish Racing Fortnite")
+        await interaction.channel.send(content=uzytkownik.mention, embed=embed)
+        await uzytkownik.add_roles(
+            interaction.guild.get_role(1187472243429740627),
+            interaction.guild.get_role(1359178553253695681)
+        )
+    else:
+        embed = discord.Embed(
+            title=f"Wynik rejestracji - {uzytkownik.name}",
+            description=f"**Twoja rejestracja została rozpatrzona negatywnie!**\n**Notatka:** {opis}",
+            color=hex_color("#ff0000")
+        )
+        embed.set_footer(text="Official Polish Racing Fortnite")
+        await interaction.channel.send(content=uzytkownik.mention, embed=embed)
+
+@tree.command(name="twitter", description="Opublikuj Posta na Twitterze")
+@app_commands.describe(obraz="Obraz (opcjonalny)")
+async def twitter_command(interaction: discord.Interaction, obraz: Optional[discord.Attachment] = None):
+    await interaction.response.send_modal(TwitterModal(image=obraz))
+
+@tree.command(name="news", description="Opublikuj Newsa!")
+@app_commands.describe(obraz="Obraz (opcjonalny)")
+async def news_command(interaction: discord.Interaction, obraz: Optional[discord.Attachment] = None):
+    NEWS_ROLE_ID = 1187471587931336811  # <<--- TUTAJ PODAJ ID ROLI
+
+    has_role = discord.utils.get(interaction.user.roles, id=NEWS_ROLE_ID)
+    if not has_role:
+        await interaction.response.send_message("Nie posiadasz odpowiednich uprawnień!", ephemeral=True)
+        return
+
+    class NewsModal(discord.ui.Modal, title="Nowy News"):
+        tytul = discord.ui.TextInput(label="Tytuł", style=discord.TextStyle.short, required=True, min_length=3, max_length=50)
+        tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, required=True, min_length=10, max_length=4000)
+
+        async def on_submit(self, interaction_modal: discord.Interaction):
+            user = interaction_modal.user
+            avatar_url = user.display_avatar.url
+            username = user.name
+
+            embed = discord.Embed(
+                title=self.tytul.value,
+                description=self.tresc.value,
+                color=hex_color("#FFFFFF")
+            )
+            embed.set_author(name=username, icon_url=avatar_url)
+            embed.set_footer(text="Wysłano")
+            embed.timestamp = datetime.now(timezone.utc)
+
+            if obraz and obraz.content_type.startswith("image"):
+                embed.set_image(url=obraz.url)
+
+            kanal = interaction_modal.guild.get_channel(1228665355832922173)
+            if kanal:
+                await kanal.send(embed=embed)
+                await interaction_modal.response.send_message("Pomyślnie opublikowano newsa!", ephemeral=True)
+            else:
+                await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
+
+    await interaction.response.send_modal(NewsModal())
+
+# --- BŁĘDY ---
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    elif isinstance(error, commands.MissingPermissions):
+        await ctx.send(embed=discord.Embed(title="❌ Brak uprawnień", description="Nie masz wymaganych uprawnień!", color=0xFFFFFF))
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(embed=discord.Embed(title="❌ Brakujący argument", description=f"Brakuje: `{error.param.name}`", color=0xFFFFFF))
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(embed=discord.Embed(title="❌ Zły argument", description="Podałeś nieprawidłowy argument.", color=0xFFFFFF))
+    else:
+        await ctx.send(embed=discord.Embed(title="❌ Błąd", description="Wystąpił błąd.", color=0xFFFFFF))
+        print(error)
+
+# --- START BOTA ---
+if __name__ == "__main__":
+    TOKEN = "TWÓJ_TOKEN_TUTAJ"
+    if not TOKEN or TOKEN == "TWÓJ_TOKEN_TUTAJ":
+        print("❌ Ustaw swój token bota w kodzie!")
+    else:
+        try:
+            bot.run(TOKEN)
+        except discord.LoginFailure:
+            print("❌ Nieprawidłowy token!")
+        except Exception as e:
+            print(f"❌ Błąd: {e}")
