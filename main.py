@@ -4,12 +4,7 @@ from discord import app_commands
 import asyncio
 from typing import Optional
 from datetime import datetime, timezone
-import psycopg2
-
-DB_URL = "postgresql://postgres:LSsnOUgoaBdfALARJNHuOfdbrQYcfCup@postgres.railway.internal:5432/railway"
-
-def get_conn():
-    return psycopg2.connect(DB_URL)
+import random
 
 def hex_color(hex_str):
     return int(hex_str.lstrip('#'), 16)
@@ -33,6 +28,43 @@ async def ping(ctx):
     latency = round(bot.latency * 1000)
     await ctx.send(f"Ping poprawny {latency} ms")
     
+@bot.command(name='msg')
+@commands.has_permissions(administrator=True) # Opcjonalnie: Tylko administratorzy mogą używać tej komendy
+async def msg(ctx, *, message_content: str):
+    await ctx.send(message_content)
+    await ctx.message.delete()
+    
+
+@tree.command(name="konto", description="Wyświetl informacje o koncie!")
+@app_commands.describe(uzytkownik="Zobacz konto innego użytkownika")
+async def konto_command(interaction: discord.Interaction, uzytkownik: discord.User):
+    try:
+        # Ensure user exists in database
+        user_data = ensure_user_exists(uzytkownik.name)
+        
+        # Extract data (assuming columns: id, username, oprf_coins, paczki)
+        oprf_coins = user_data[2] if len(user_data) > 2 else 0
+        paczki = user_data[3] if len(user_data) > 3 else 0
+        
+        embed = discord.Embed(
+            title=f"Podgląd Konta - {uzytkownik.name}",
+            description=(
+                f"**Stan Konta**\n"
+                f"- Stan Konta: `{oprf_coins}` OPRF Coinsów\n"
+                f"**Przedmioty**\n"
+                f"- Paczki: `{paczki}`\n"
+            ),
+            color=hex_color("#FFFFFF")
+        )
+        embed.set_thumbnail(url=uzytkownik.display_avatar.url)
+        embed.set_footer(text="Official Polish Racing Fortnite")
+        
+        await interaction.response.send_message(embed=embed)
+        
+    except Exception as e:
+        await interaction.response.send_message("Wystąpił błąd podczas pobierania danych konta.", ephemeral=True)
+        print(f"Error in konto command: {e}")
+
 @tree.command(name="pomoc", description="Wyświetla kartę pomocy bota")
 async def pomoc_command(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -45,13 +77,17 @@ async def pomoc_command(interaction: discord.Interaction):
             "Za wszelkie problemy przepraszamy!\n\n"
             "**Komendy**\n"
             "`Prefix - ;`\n"
-            "ping - pokazuje opóźnienie bota i sprawdza jego aktywność\n\n"
+            "ping - pokazuje opóźnienie bota i sprawdza jego aktywność\n"
+            "wnioski - wysyła zbiór wniosków które można wysłać (tylko admin)\n"
+            "msg - bot wyśle wiadomość jaką będziesz chciał (tylko admin)\n\n"
             "`Ukośnik - /`\n"
             "pomoc - wyświetla kartę pomocy bota\n"
             "twitter - pozwala opublikować posta na kanale <#1282096776928559246>\n"
             "news - pozwala opublikować posta na kanale <#1228665355832922173> (tylko admin)\n"
             "rejestracja - udostępnia wynik rejestracji (tylko admin)\n"
-            "kontrakt - wysyła kontrakt do FIA"
+            "kontrakt - wysyła kontrakt do FIA\n"
+            "konto - wyświetla informacje o koncie użytkownika\n"
+            "paczka - otwiera paczkę Kierowców OPRF"
         ),
         color=hex_color("#FFFFFF")
     )
@@ -389,17 +425,44 @@ async def news_command(interaction: discord.Interaction, obraz: Optional[discord
 # --- BŁĘDY ---
 @bot.event
 async def on_command_error(ctx, error):
+    # Wiadomość błędu
+    error_message = ""
+
     if isinstance(error, commands.CommandNotFound):
+        # Jeśli komenda nie istnieje, możesz zadecydować, czy chcesz wysyłać wiadomość.
+        # Zazwyczaj lepiej to pominąć, aby nie spamować, jeśli ktoś się pomyli.
         return
     elif isinstance(error, commands.MissingPermissions):
-        await ctx.send(embed=discord.Embed(title="❌ Brak uprawnień", description="Nie masz wymaganych uprawnień!", color=0xFFFFFF))
+        # Brak uprawnień
+        error_message = "❌ Nie masz wystarczających uprawnień, aby użyć tej komendy."
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(embed=discord.Embed(title="❌ Brakujący argument", description=f"Brakuje: `{error.param.name}`", color=0xFFFFFF))
+        # Brakujący argument (np. ;owner bez treści)
+        error_message = f"❌ Brakuje wymaganego argumentu: `{error.param.name}`. Sprawdź użycie komendy!"
     elif isinstance(error, commands.BadArgument):
-        await ctx.send(embed=discord.Embed(title="❌ Zły argument", description="Podałeś nieprawidłowy argument.", color=0xFFFFFF))
+        # Zły typ argumentu (np. oczekiwano liczby, a podano tekst)
+        error_message = "❌ Podałeś nieprawidłowy argument. Sprawdź, czy wpisałeś go poprawnie!"
     else:
-        await ctx.send(embed=discord.Embed(title="❌ Błąd", description="Wystąpił błąd.", color=0xFFFFFF))
-        print(error)
+        # Obsługa wszystkich innych nieprzewidzianych błędów
+        error_message = "❌ Wystąpił nieoczekiwany błąd podczas wykonywania komendy. Zgłoś to administratorowi!"
+        print(f"Wystąpił nieznany błąd w komendzie '{ctx.command}' wywołanej przez {ctx.author}: {error}") # Pełny błąd do konsoli
+
+    # Wysyłanie wiadomości błędu na kanał i usunięcie jej po kilku sekundach
+    if error_message: # Upewnij się, że wiadomość nie jest pusta
+        try:
+            # ctx.reply() odpowiada na wiadomość użytkownika, pingując go
+            # Możesz użyć ctx.send(), jeśli nie chcesz pingować
+            await ctx.reply(error_message, delete_after=10) # Wiadomość zniknie po 10 sekundach
+        except discord.HTTPException:
+            # W rzadkich przypadkach, jeśli wiadomość ctx.reply nie może zostać wysłana
+            pass # Możesz obsłużyć ten przypadek, np. logując błąd
+
+    # Usuń oryginalną wiadomość z komendą, aby posprzątać czat
+    if not isinstance(error, commands.CommandNotFound):
+        try:
+            await ctx.message.delete()
+        except discord.Forbidden:
+            # Bot nie ma uprawnień do usuwania wiadomości, ignoruj
+            pass
 
 # --- START BOTA ---
 if __name__ == "__main__":
