@@ -15,56 +15,28 @@ intents.members = True
 
 bot = commands.Bot(command_prefix=';', intents=intents, help_command=None)
 tree = bot.tree
-
+    
 @bot.event
 async def on_ready():
     await tree.sync()
     print(f'{bot.user} jest online!')
     activity = discord.Activity(type=discord.ActivityType.listening, name="/pomoc")
     await bot.change_presence(activity=activity)
-
+    
 @bot.command(name='ping')
 async def ping(ctx):
     latency = round(bot.latency * 1000)
     await ctx.send(f"Ping poprawny {latency} ms")
     
 @bot.command(name='msg')
-@commands.has_permissions(administrator=True) # Opcjonalnie: Tylko administratorzy mogą używać tej komendy
 async def msg(ctx, *, message_content: str):
+    if not ctx.author.guild_permissions.administrator:
+        print(f"Użytkownik {ctx.author} (ID: {ctx.author.id}) próbował użyć komendy '{ctx.command.name}', ale nie posiada uprawnień administratora.")
+        return 
+
     await ctx.send(message_content)
     await ctx.message.delete()
     
-
-@tree.command(name="konto", description="Wyświetl informacje o koncie!")
-@app_commands.describe(uzytkownik="Zobacz konto innego użytkownika")
-async def konto_command(interaction: discord.Interaction, uzytkownik: discord.User):
-    try:
-        # Ensure user exists in database
-        user_data = ensure_user_exists(uzytkownik.name)
-        
-        # Extract data (assuming columns: id, username, oprf_coins, paczki)
-        oprf_coins = user_data[2] if len(user_data) > 2 else 0
-        paczki = user_data[3] if len(user_data) > 3 else 0
-        
-        embed = discord.Embed(
-            title=f"Podgląd Konta - {uzytkownik.name}",
-            description=(
-                f"**Stan Konta**\n"
-                f"- Stan Konta: `{oprf_coins}` OPRF Coinsów\n"
-                f"**Przedmioty**\n"
-                f"- Paczki: `{paczki}`\n"
-            ),
-            color=hex_color("#FFFFFF")
-        )
-        embed.set_thumbnail(url=uzytkownik.display_avatar.url)
-        embed.set_footer(text="Official Polish Racing Fortnite")
-        
-        await interaction.response.send_message(embed=embed)
-        
-    except Exception as e:
-        await interaction.response.send_message("Wystąpił błąd podczas pobierania danych konta.", ephemeral=True)
-        print(f"Error in konto command: {e}")
-
 @tree.command(name="pomoc", description="Wyświetla kartę pomocy bota")
 async def pomoc_command(interaction: discord.Interaction):
     embed = discord.Embed(
@@ -86,8 +58,6 @@ async def pomoc_command(interaction: discord.Interaction):
             "news - pozwala opublikować posta na kanale <#1228665355832922173> (tylko admin)\n"
             "rejestracja - udostępnia wynik rejestracji (tylko admin)\n"
             "kontrakt - wysyła kontrakt do FIA\n"
-            "konto - wyświetla informacje o koncie użytkownika\n"
-            "paczka - otwiera paczkę Kierowców OPRF"
         ),
         color=hex_color("#FFFFFF")
     )
@@ -297,7 +267,7 @@ class TwitterModal(discord.ui.Modal, title="Twitter"):
         user = interaction_modal.user
         avatar_url = user.display_avatar.url
         username = user.name
-        relative_time = discord.utils.format_dt(datetime.now(timezone.utc), style="R")
+        # relative_time = discord.utils.format_dt(datetime.now(timezone.utc), style="R") # Nieużywane, usunięte
 
         embed = discord.Embed(
             title=self.tytul.value,
@@ -321,24 +291,39 @@ class TwitterModal(discord.ui.Modal, title="Twitter"):
         else:
             await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
 
-class NewsModal(discord.ui.Modal, title="News"):
-    tytul = discord.ui.TextInput(label="Tytuł", min_length=3, max_length=50)
-    tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, min_length=10, max_length=4000)
+# Przeniesiona definicja NewsModal na zewnątrz news_command, aby była globalnie dostępna
+class NewsModal(discord.ui.Modal, title="Nowy News"): # Zmieniona nazwa na "Nowy News" dla spójności
+    tytul = discord.ui.TextInput(label="Tytuł", style=discord.TextStyle.short, required=True, min_length=3, max_length=50)
+    tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, required=True, min_length=10, max_length=4000)
 
     def __init__(self, image: Optional[discord.Attachment]):
         super().__init__()
         self.image = image
 
-    async def on_submit(self, interaction: discord.Interaction):
+    async def on_submit(self, interaction_modal: discord.Interaction):
+        user = interaction_modal.user
+        avatar_url = user.display_avatar.url
+        username = user.name
+
         embed = discord.Embed(
             title=self.tytul.value,
             description=self.tresc.value,
-            color=hex_color("#ffcc00")
+            color=hex_color("#FFFFFF")
         )
+        embed.set_author(name=username, icon_url=avatar_url)
+        embed.set_footer(text="Wysłano")
+        embed.timestamp = datetime.now(timezone.utc)
+
         if self.image and self.image.content_type.startswith("image"):
             embed.set_image(url=self.image.url)
 
-        await interaction.response.send_message(embed=embed)
+        kanal = interaction_modal.guild.get_channel(1228665355832922173)
+        if kanal:
+            await kanal.send(embed=embed)
+            await interaction_modal.response.send_message("Pomyślnie opublikowano newsa!", ephemeral=True)
+        else:
+            await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
+
 
 # --- KOMENDY ---
 @tree.command(name="kontrakt", description="Wyślij kontrakt do FIA!")
@@ -392,81 +377,40 @@ async def news_command(interaction: discord.Interaction, obraz: Optional[discord
         await interaction.response.send_message("Nie posiadasz odpowiednich uprawnień!", ephemeral=True)
         return
 
-    class NewsModal(discord.ui.Modal, title="Nowy News"):
-        tytul = discord.ui.TextInput(label="Tytuł", style=discord.TextStyle.short, required=True, min_length=3, max_length=50)
-        tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, required=True, min_length=10, max_length=4000)
-
-        async def on_submit(self, interaction_modal: discord.Interaction):
-            user = interaction_modal.user
-            avatar_url = user.display_avatar.url
-            username = user.name
-
-            embed = discord.Embed(
-                title=self.tytul.value,
-                description=self.tresc.value,
-                color=hex_color("#FFFFFF")
-            )
-            embed.set_author(name=username, icon_url=avatar_url)
-            embed.set_footer(text="Wysłano")
-            embed.timestamp = datetime.now(timezone.utc)
-
-            if obraz and obraz.content_type.startswith("image"):
-                embed.set_image(url=obraz.url)
-
-            kanal = interaction_modal.guild.get_channel(1228665355832922173)
-            if kanal:
-                await kanal.send(embed=embed)
-                await interaction_modal.response.send_message("Pomyślnie opublikowano newsa!", ephemeral=True)
-            else:
-                await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
-
-    await interaction.response.send_modal(NewsModal())
+    await interaction.response.send_modal(NewsModal(image=obraz))
 
 # --- BŁĘDY ---
 @bot.event
 async def on_command_error(ctx, error):
-    # Wiadomość błędu
     error_message = ""
 
     if isinstance(error, commands.CommandNotFound):
-        # Jeśli komenda nie istnieje, możesz zadecydować, czy chcesz wysyłać wiadomość.
-        # Zazwyczaj lepiej to pominąć, aby nie spamować, jeśli ktoś się pomyli.
         return
     elif isinstance(error, commands.MissingPermissions):
-        # Brak uprawnień
         error_message = "❌ Nie masz wystarczających uprawnień, aby użyć tej komendy."
     elif isinstance(error, commands.MissingRequiredArgument):
-        # Brakujący argument (np. ;owner bez treści)
         error_message = f"❌ Brakuje wymaganego argumentu: `{error.param.name}`. Sprawdź użycie komendy!"
     elif isinstance(error, commands.BadArgument):
-        # Zły typ argumentu (np. oczekiwano liczby, a podano tekst)
         error_message = "❌ Podałeś nieprawidłowy argument. Sprawdź, czy wpisałeś go poprawnie!"
     else:
-        # Obsługa wszystkich innych nieprzewidzianych błędów
         error_message = "❌ Wystąpił nieoczekiwany błąd podczas wykonywania komendy. Zgłoś to administratorowi!"
-        print(f"Wystąpił nieznany błąd w komendzie '{ctx.command}' wywołanej przez {ctx.author}: {error}") # Pełny błąd do konsoli
+        print(f"Wystąpił nieznany błąd w komendzie '{ctx.command}' wywołanej przez {ctx.author}: {error}")
 
-    # Wysyłanie wiadomości błędu na kanał i usunięcie jej po kilku sekundach
-    if error_message: # Upewnij się, że wiadomość nie jest pusta
+    if error_message:
         try:
-            # ctx.reply() odpowiada na wiadomość użytkownika, pingując go
-            # Możesz użyć ctx.send(), jeśli nie chcesz pingować
-            await ctx.reply(error_message, delete_after=10) # Wiadomość zniknie po 10 sekundach
+            await ctx.reply(error_message, delete_after=10)
         except discord.HTTPException:
-            # W rzadkich przypadkach, jeśli wiadomość ctx.reply nie może zostać wysłana
-            pass # Możesz obsłużyć ten przypadek, np. logując błąd
+            pass
 
-    # Usuń oryginalną wiadomość z komendą, aby posprzątać czat
     if not isinstance(error, commands.CommandNotFound):
         try:
             await ctx.message.delete()
         except discord.Forbidden:
-            # Bot nie ma uprawnień do usuwania wiadomości, ignoruj
             pass
 
 # --- START BOTA ---
 if __name__ == "__main__":
-    TOKEN = "TWÓJ_TOKEN_TUTAJ"
+    TOKEN = "TWÓJ_TOKEN_TUTAJ" # Pamiętaj, aby tutaj wstawić swój token bota
     if not TOKEN or TOKEN == "TWÓJ_TOKEN_TUTAJ":
         print("❌ Ustaw swój token bota w kodzie!")
     else:
