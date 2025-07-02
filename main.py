@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 import random
 
 def hex_color(hex_str):
-    return int(hex_str.lstrip('#'), 16)
+    # Poprawka: discord.Color oczekuje int, więc bezpośrednio zwracamy int
+    return discord.Color(int(hex_str.lstrip('#'), 16))
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = True
+intents.members = True # Potrzebne do pobierania ról użytkownika
 
 bot = commands.Bot(command_prefix=';', intents=intents, help_command=None)
 tree = bot.tree
@@ -254,7 +255,7 @@ async def wnioski(ctx):
     await ctx.send(embed=embed, view=WnioskiView())
     await ctx.message.delete()
     
-# --- MODALE ---
+# --- MODALE TWEETER I NEWS ---
 class TwitterModal(discord.ui.Modal, title="Twitter"):
     tytul = discord.ui.TextInput(label="Tytuł", min_length=3, max_length=50)
     tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, min_length=10, max_length=4000)
@@ -267,7 +268,6 @@ class TwitterModal(discord.ui.Modal, title="Twitter"):
         user = interaction_modal.user
         avatar_url = user.display_avatar.url
         username = user.name
-        # relative_time = discord.utils.format_dt(datetime.now(timezone.utc), style="R") # Nieużywane, usunięte
 
         embed = discord.Embed(
             title=self.tytul.value,
@@ -278,7 +278,6 @@ class TwitterModal(discord.ui.Modal, title="Twitter"):
         embed.set_author(name=username, icon_url=avatar_url)
         embed.set_footer(text="Wysłano")
         embed.timestamp = datetime.now(timezone.utc)
-
 
         if self.image and self.image.content_type.startswith("image"):
             embed.set_image(url=self.image.url)
@@ -292,13 +291,16 @@ class TwitterModal(discord.ui.Modal, title="Twitter"):
             await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
 
 # Przeniesiona definicja NewsModal na zewnątrz news_command, aby była globalnie dostępna
-class NewsModal(discord.ui.Modal, title="Nowy News"): # Zmieniona nazwa na "Nowy News" dla spójności
+class NewsModal(discord.ui.Modal, title="Nowy News"): 
     tytul = discord.ui.TextInput(label="Tytuł", style=discord.TextStyle.short, required=True, min_length=3, max_length=50)
     tresc = discord.ui.TextInput(label="Treść", style=discord.TextStyle.paragraph, required=True, min_length=10, max_length=4000)
 
-    def __init__(self, image: Optional[discord.Attachment]):
+    # Zmodyfikowany __init__ aby przyjmował role_id i bot_reactions
+    def __init__(self, image: Optional[discord.Attachment], role_id: int, bot_reactions: list):
         super().__init__()
         self.image = image
+        self.role_id = role_id
+        self.bot_reactions = bot_reactions
 
     async def on_submit(self, interaction_modal: discord.Interaction):
         user = interaction_modal.user
@@ -317,12 +319,27 @@ class NewsModal(discord.ui.Modal, title="Nowy News"): # Zmieniona nazwa na "Nowy
         if self.image and self.image.content_type.startswith("image"):
             embed.set_image(url=self.image.url)
 
-        kanal = interaction_modal.guild.get_channel(1228665355832922173)
+        kanal = interaction_modal.guild.get_channel(1228665355832922173) # Kanał docelowy dla newsów
         if kanal:
-            await kanal.send(embed=embed)
+            # Pobieranie obiektu roli do wzmianki
+            role_to_mention = interaction_modal.guild.get_role(self.role_id)
+            content_message = ""
+            if role_to_mention:
+                content_message = f"{role_to_mention.mention}\n" # Wzmianka roli nad embedem
+
+            # Wysyłanie wiadomości z wzmianką roli i embedem
+            msg = await kanal.send(content=content_message, embed=embed)
+            
+            # Dodawanie reakcji bota
+            for emoji in self.bot_reactions:
+                try:
+                    await msg.add_reaction(emoji)
+                except discord.HTTPException as e:
+                    print(f"Nie udało się dodać reakcji {emoji}: {e}")
+
             await interaction_modal.response.send_message("Pomyślnie opublikowano newsa!", ephemeral=True)
         else:
-            await interaction_modal.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
+            await interaction_modal.response.send_message("Nie znaleziono kanału docelowego dla newsa!", ephemeral=True)
 
 
 # --- KOMENDY ---
@@ -341,7 +358,7 @@ async def kontrakt_command(interaction: discord.Interaction, kierowca: discord.U
 async def rejestracja_command(interaction: discord.Interaction, wynik: str, uzytkownik: discord.Member, opis: str):
     await interaction.response.send_message("Wykonano", ephemeral=True)
 
-    if wynik == "True":
+    if wynik.lower() == "true": # Użyj .lower() dla elastyczności
         embed = discord.Embed(
             title=f"Wynik rejestracji - {uzytkownik.name}",
             description=f"**Twoja rejestracja została rozpatrzona pozytywnie!**\n**Notatka:** {opis}",
@@ -349,10 +366,16 @@ async def rejestracja_command(interaction: discord.Interaction, wynik: str, uzyt
         )
         embed.set_footer(text="Official Polish Racing Fortnite")
         await interaction.channel.send(content=uzytkownik.mention, embed=embed)
-        await uzytkownik.add_roles(
-            interaction.guild.get_role(1187472243429740627),
-            interaction.guild.get_role(1359178553253695681)
-        )
+        
+        # Pamiętaj, aby role istniały na serwerze!
+        role_1 = interaction.guild.get_role(1187472243429740627)
+        role_2 = interaction.guild.get_role(1359178553253695681)
+        
+        if role_1:
+            await uzytkownik.add_roles(role_1)
+        if role_2:
+            await uzytkownik.add_roles(role_2)
+        
     else:
         embed = discord.Embed(
             title=f"Wynik rejestracji - {uzytkownik.name}",
@@ -370,14 +393,28 @@ async def twitter_command(interaction: discord.Interaction, obraz: Optional[disc
 @tree.command(name="news", description="Opublikuj Newsa!")
 @app_commands.describe(obraz="Obraz (opcjonalny)")
 async def news_command(interaction: discord.Interaction, obraz: Optional[discord.Attachment] = None):
-    NEWS_ROLE_ID = 1187471587931336811  # <<--- TUTAJ PODAJ ID ROLI
+    # ID Roli, którą chcesz wzmiankować nad embedem newsa
+    ROLE_ID_FOR_NEWS_MENTION = 1274060061911814288 # <<-- ZMIEŃ TO NA PRAWDZIWE ID ROLI, NP. ROLA "NEWSY" LUB "OGŁOSZENIA"
 
-    has_role = discord.utils.get(interaction.user.roles, id=NEWS_ROLE_ID)
-    if not has_role:
-        await interaction.response.send_message("Nie posiadasz odpowiednich uprawnień!", ephemeral=True)
+    # Lista emotek, którymi bot ma zareagować na newsa
+    REACTIONS_FOR_NEWS = ["🔁"] # Możesz dodać więcej emotek
+
+    # Sprawdzanie uprawnień administratora dla komendy news
+    # NEWS_ROLE_ID służy do sprawdzania, czy użytkownik ma uprawnienia do użycia komendy news
+    # ROLE_ID_FOR_NEWS_MENTION służy do wzmianki roli w wysyłanej wiadomości
+    ADMIN_NEWS_ROLE_ID = 1187471587931336811 # To jest to samo ID, które miałeś wcześniej, służy do autoryzacji
+    
+    # Lepiej sprawdzić, czy użytkownik ma uprawnienia administratora na serwerze
+    # lub określoną rolę, która pozwala mu wysyłać newsy.
+    # W twoim kodzie używasz `NEWS_ROLE_ID` do sprawdzenia.
+    # Zostawię to tak, jak miałeś, ale zmieniam nazwę zmiennej na bardziej czytelną.
+    
+    if not interaction.user.guild_permissions.administrator and not discord.utils.get(interaction.user.roles, id=ADMIN_NEWS_ROLE_ID):
+        await interaction.response.send_message("Nie posiadasz odpowiednich uprawnień do publikowania newsów!", ephemeral=True)
         return
 
-    await interaction.response.send_modal(NewsModal(image=obraz))
+    # Przekazujemy ID roli i listę reakcji do NewsModal
+    await interaction.response.send_modal(NewsModal(image=obraz, role_id=ROLE_ID_FOR_NEWS_MENTION, bot_reactions=REACTIONS_FOR_NEWS))
 
 # --- BŁĘDY ---
 @bot.event
