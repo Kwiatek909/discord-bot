@@ -351,6 +351,88 @@ async def kontrakt_command(interaction: discord.Interaction, kierowca: discord.U
     if kanal:
         await kanal.send(f"Szef Zespołu: <@{szef_id}>\nKierowca: {kierowca.mention}\nZespół: {zespol.mention}\n{kontrakt.url}")
     await interaction.response.send_message("Pomyślnie wysłano kontrakt do FIA!", ephemeral=True)
+    
+@tree.command(name="racecontrol", description="Wyślij powiadomienie Race Control!")
+@app_commands.describe(
+    typ="Typ powiadomienia",
+    powod="Powód wydania powiadomienia", 
+    pojazd="Kierowca/Pojazd #1",
+    opis="Szczegółowy opis sytuacji",
+    pojazd2="Kierowca/Pojazd #2 (opcjonalnie)",
+    pojazd3="Kierowca/Pojazd #3 (opcjonalnie)"
+)
+async def racecontrol_command(
+    interaction: discord.Interaction, 
+    typ: str, 
+    powod: str, 
+    pojazd: discord.User, 
+    opis: str,
+    pojazd2: discord.User = None,
+    pojazd3: discord.User = None
+):
+    # Sprawdzenie uprawnień
+    required_role_id = 1188129655153242172
+    if not any(role.id == required_role_id for role in interaction.user.roles):
+        await interaction.response.send_message("Nie masz uprawnień do używania tej komendy!", ephemeral=True)
+        return
+    
+    # Pobranie kanału
+    kanal = interaction.guild.get_channel(1222890220584697957)
+    if not kanal:
+        await interaction.response.send_message("Nie znaleziono kanału docelowego!", ephemeral=True)
+        return
+    
+    # Budowanie listy pojazdów
+    pojazdy_list = [pojazd.mention]
+    if pojazd2:
+        pojazdy_list.append(pojazd2.mention)
+    if pojazd3:
+        pojazdy_list.append(pojazd3.mention)
+    pojazdy_text = ", ".join(pojazdy_list)
+    
+    # Ustawienie koloru i thumbnail w zależności od typu
+    if typ.lower() == "normal":
+        embed_color = 0x063672  # Niebieski
+        thumbnail_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
+    elif typ.lower() == "dochodzenie":
+        embed_color = 0xff8000  # Pomarańczowy
+        thumbnail_url = "https://cdn.discordapp.com/emojis/1237437135645315184.webp?size=96"
+    else:
+        embed_color = 0x063672  # Domyślny niebieski
+        thumbnail_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
+    
+    # Pobieranie aktualnej godziny dla strefy czasowej polskiej
+    import datetime
+    teraz = datetime.datetime.now()
+    # Dodanie 2 godzin dla czasu polskiego (CET/CEST)
+    teraz_polska = teraz + datetime.timedelta(hours=2)
+    czas = teraz_polska.strftime("%H:%M")
+    
+    # Tworzenie embed
+    embed = discord.Embed(
+        title="**Race Control - Powiadomienie**",
+        color=embed_color
+    )
+    
+    # Ustawienie author z logo FIA
+    embed.set_author(
+        name="Fédération Internationale de l'Automobile",
+        icon_url="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e8/F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg/1200px-F%C3%A9d%C3%A9ration_Internationale_de_l%27Automobile_wordmark.svg.png"
+    )
+    
+    # Ustawienie thumbnail
+    embed.set_thumbnail(url=thumbnail_url)
+    
+    # Dodanie pól
+    embed.add_field(name="**Race Control:**", value=powod, inline=True)
+    embed.add_field(name="**Czas:**", value=czas, inline=True)
+    embed.add_field(name="**Pojazdy:**", value=pojazdy_text, inline=False)
+    embed.add_field(name="**Powód:**", value=opis, inline=False)
+    
+    # Wysłanie embed
+    ID_ROLI_RACE_CONTROL_PING = 1285222412513710171
+    await kanal.send(f"<@&{ID_ROLI_RACE_CONTROL_PING}>", embed=embed)
+    await interaction.response.send_message("Pomyślnie wysłano powiadomienie Race Control!", ephemeral=True)
 
 @tree.command(name="rejestracja", description="rejestracja")
 @app_commands.default_permissions(administrator=True)
