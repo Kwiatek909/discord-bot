@@ -142,7 +142,7 @@ async def sklep_command(interaction: discord.Interaction):
             last_data_reload_time = 0.0
 
         # Krok 2: Sprawdź, czy użytkownik ma wystarczająco monet
-        item_cost = 5
+        item_cost = 25
         current_coins = get_user_coins(user_id)
         
         if current_coins >= item_cost:
