@@ -7,10 +7,13 @@ from datetime import datetime, timezone
 import random
 import json
 import os
+import time
 
+# --- Funkcje pomocnicze ---
 def hex_color(hex_str):
     return discord.Color(int(hex_str.lstrip('#'), 16))
 
+# --- Konfiguracja bota ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True # Potrzebne do pobierania ról użytkownika
@@ -18,43 +21,20 @@ intents.members = True # Potrzebne do pobierania ról użytkownika
 bot = commands.Bot(command_prefix=';', intents=intents, help_command=None)
 tree = bot.tree
 
-@bot.event
-async def on_ready():
-    await tree.sync()
-    print(f'{bot.user} jest online!')
-    activity = discord.Activity(type=discord.ActivityType.listening, name="/pomoc")
-    await bot.change_presence(activity=activity)
+# --- Nazwy plików bazy danych ---
+DB_FILE = 'data.json'
+DRIVERS_FILE = 'drivers.json'
 
-# Bazy danych json
-DB_FILE = 'data.json' 
-DRIVERS_FILE = 'drivers.json' 
-
-def load_drivers_data():
-    """
-    Ładuje dane o kierowcach z pliku JSON. Zwraca pustą listę, jeśli plik nie istnieje.
-    """
-    if os.path.exists(DRIVERS_FILE):
-        try:
-            with open(DRIVERS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            print(f"Ostrzeżenie: Plik {DRIVERS_FILE} jest uszkodzony lub pusty. Zwracam pustą listę.")
-            return []
-    return []
-
-# Będziemy potrzebować globalnej zmiennej dla danych kierowców, podobnie jak dla bot_data
-all_drivers_data = [] # Zostanie załadowana w on_ready
-
-# Deklaracja globalnych zmiennych, które będą przechowywać dane i czas modyfikacji pliku.
-# Zostaną one prawidłowo zainicjowane w funkcji on_ready bota.
+# --- Globalne zmienne do przechowywania danych i ich czasów modyfikacji ---
 bot_data = {}
-last_data_reload_time = 0.0
+last_data_reload_time = 0.0 # Czas ostatniej modyfikacji DB_FILE
 
+all_drivers_data = [] # WAŻNE: Zostanie załadowana w on_ready
+last_drivers_load_time = 0.0 # NOWA ZMIENNA: Czas ostatniej modyfikacji DRIVERS_FILE
+
+# --- Funkcje ładowania/zapisywania danych ---
 def load_data():
-    """
-    Ładuje dane z pliku JSON. Zwraca pusty słownik, jeśli plik nie istnieje.
-    Obsługuje błąd, jeśli plik jest pusty lub uszkodzony.
-    """
+    """Ładuje dane użytkowników z pliku JSON."""
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, 'r', encoding='utf-8') as f:
@@ -65,240 +45,279 @@ def load_data():
     return {}
 
 def save_data(data):
-    """
-    Zapisuje dane do pliku JSON. Plik jest formatowany z wcięciem (indent=4) dla lepszej czytelności.
-    """
+    """Zapisuje dane użytkowników do pliku JSON."""
     with open(DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4)
 
+def load_drivers_data():
+    """Ładuje dane o kierowcach z pliku JSON."""
+    if os.path.exists(DRIVERS_FILE):
+        try:
+            with open(DRIVERS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Ostrzeżenie: Plik {DRIVERS_FILE} jest uszkodzony lub pusty. Zwracam pustą listę.")
+            return []
+    return [] # Zwróć pustą listę, jeśli plik nie istnieje
+
 # --- Funkcje pomocnicze do pobierania danych użytkownika ---
-# Te funkcje odwołują się do globalnej zmiennej bot_data
 def get_user_coins(user_id):
     """Pobiera liczbę oprf_coins użytkownika."""
     user_id_str = str(user_id)
-    return bot_data.get(user_id_str, {}).get("oprf_coins", 0) # Domyślnie 0, jeśli brak danych
+    # Zawsze przeładowuj dane, aby być pewnym aktualności
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
+    return bot_data.get(user_id_str, {}).get("oprf_coins", 0)
 
 def get_user_paczki(user_id):
     """Pobiera liczbę paczek użytkownika."""
     user_id_str = str(user_id)
+    # Zawsze przeładowuj dane, aby być pewnym aktualności
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
     return bot_data.get(user_id_str, {}).get("paczki", 0)
 
 def get_user_cards(user_id):
     """Pobiera listę kart kierowców użytkownika."""
     user_id_str = str(user_id)
-    # Zapewnia, że pole 'karty' istnieje i zwraca pustą listę, jeśli go brak
+    # Zawsze przeładowuj dane, aby być pewnym aktualności
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
     return bot_data.get(user_id_str, {}).get("karty", [])
 
-    
+# --- Eventy bota ---
+@bot.event
+async def on_ready():
+    global bot_data, last_data_reload_time, all_drivers_data, last_drivers_load_time
+
+    # KROK 1: Wczytaj dane użytkowników (data.json)
+    if os.path.exists(DB_FILE):
+        try:
+            bot_data = load_data()
+            last_data_reload_time = os.path.getmtime(DB_FILE)
+            print(f"Pomyślnie załadowano dane użytkowników z {DB_FILE}.")
+        except Exception as e:
+            print(f"Błąd podczas ładowania {DB_FILE} w on_ready: {e}. Inicjalizuję puste dane.")
+            bot_data = {}
+            last_data_reload_time = 0.0
+    else:
+        print(f"Plik {DB_FILE} nie istnieje. Inicjalizuję puste dane użytkowników.")
+        bot_data = {}
+        save_data(bot_data) # Opcjonalnie: stwórz pusty plik od razu, by uniknąć błędów
+        last_data_reload_time = 0.0
+
+    # KROK 2: Wczytaj dane kierowców (drivers.json)
+    if os.path.exists(DRIVERS_FILE):
+        try:
+            all_drivers_data = load_drivers_data()
+            last_drivers_load_time = os.path.getmtime(DRIVERS_FILE)
+            print(f"Pomyślnie załadowano {len(all_drivers_data)} kierowców z {DRIVERS_FILE}.")
+        except Exception as e:
+            print(f"Błąd podczas ładowania {DRIVERS_FILE} w on_ready: {e}. Lista kierowców będzie pusta.")
+            all_drivers_data = []
+            last_drivers_load_time = 0.0
+    else:
+        print(f"BŁĄD: Plik {DRIVERS_FILE} nie istnieje! Funkcje związane z kartami kierowców mogą nie działać.")
+        all_drivers_data = []
+        last_drivers_load_time = 0.0
+
+    # KROK 3: Synchronizacja komend i ustawienie statusu bota
+    await tree.sync()
+    print(f'{bot.user} jest online!')
+    activity = discord.Activity(type=discord.ActivityType.listening, name="/pomoc")
+    await bot.change_presence(activity=activity)
+
+# --- Przykładowe komendy (MUSISZ DODAĆ SWOJE KOMENDY TUTAJ) ---
 @bot.command(name='ping')
 async def ping(ctx):
     latency = round(bot.latency * 1000)
     await ctx.send(f"Ping poprawny {latency} ms")
-    
+
 @bot.command(name='msg')
 async def msg(ctx, *, message_content: str):
     if not ctx.author.guild_permissions.administrator:
         print(f"Użytkownik {ctx.author} (ID: {ctx.author.id}) próbował użyć komendy '{ctx.command.name}', ale nie posiada uprawnień administratora.")
-        return 
+        return
 
     await ctx.send(message_content)
     await ctx.message.delete()
-    
-    
+
+COOLDOWN_SECONDS = 3600
+last_kuchenko_use_time = 0
+@bot.command(name='kuchenko')
+async def kuchenko_command(ctx):
+    """
+    Wysyła wiadomość o treści 'Wiadomość, którą chcesz wysłać!' po wpisaniu ;kuchenko.
+    Komenda ma globalny cooldown ustawiony na COOLDOWN_SECONDS, zarządzany przez moduł time.
+    """
+    global last_kuchenko_use_time # Deklarujemy, że będziemy modyfikować globalną zmienną
+
+    current_time = time.time() # Pobierz aktualny czas w sekundach od epoki
+
+    # Sprawdzamy, czy minął już wystarczający czas od ostatniego użycia
+    if current_time < last_kuchenko_use_time + COOLDOWN_SECONDS:
+        remaining_seconds = int((last_kuchenko_use_time + COOLDOWN_SECONDS) - current_time)
+
+        # Formatowanie czasu dla lepszej czytelności
+        if remaining_seconds >= 3600: # Godziny
+            hours = remaining_seconds // 3600
+            minutes = (remaining_seconds % 3600) // 60
+            seconds = remaining_seconds % 60
+            time_left_str = f"{hours}h {minutes}m {seconds}s"
+        elif remaining_seconds >= 60: # Minuty
+            minutes = remaining_seconds // 60
+            seconds = remaining_seconds % 60
+            time_left_str = f"{minutes}m {seconds}s"
+        else: # Sekundy
+            time_left_str = f"{seconds}s"
+
+        await ctx.send(f"Ta komenda ma globalny cooldown! Spróbuj ponownie za **{time_left_str}**.", ephemeral=True)
+        return # Ważne: Zakończ działanie funkcji, jeśli komenda jest na cooldownie
+
+    # Jeśli komenda nie jest na cooldownie, pozwól jej się wykonać
+    last_kuchenko_use_time = current_time # Zaktualizuj czas ostatniego użycia
+    await ctx.send("https://cdn.discordapp.com/attachments/1229860230813450361/1382767013432397854/494838144_1770082443604562_1240250344963369441_n.gif?ex=6873e6a2&is=68729522&hm=9b85c900eb1562fc95b29a192e6f8a3715b179fd8e16487158d0719bb03d01d5&")
+
+# --- Zmodyfikowana komenda /sklep (używa nowej logiki ładowania) ---
 @tree.command(name="sklep", description="Odwiedź sklep OPRF!")
 @app_commands.guild_only()
 async def sklep_command(interaction: discord.Interaction):
     thumbnail_url = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
 
-    # Stwórz przycisk
     buy_pack_button = discord.ui.Button(
         label="Kup paczkę Kierowców OPRF",
         style=discord.ButtonStyle.success,
         emoji="📦",
-        custom_id="zakuppaczka" # Custom ID, które będziemy sprawdzać
+        custom_id="zakuppaczka"
     )
 
-    # Stwórz View i dodaj do niego przycisk
-    view = discord.ui.View(timeout=180) # Timeout określa, jak długo przyciski będą aktywne
+    view = discord.ui.View(timeout=180)
     view.add_item(buy_pack_button)
 
-    # --- Definicja funkcji callback dla przycisku wewnątrz funkcji komendy ---
     async def buy_pack_button_callback(interaction: discord.Interaction):
         user_id = interaction.user.id
         user_display_name = interaction.user.display_name
 
-        # --- Przeładowanie danych (tak jak w /konto) ---
-        global bot_data, last_data_reload_time
-        if os.path.exists(DB_FILE):
-            current_file_mtime = os.path.getmtime(DB_FILE)
-            if current_file_mtime > last_data_reload_time:
-                print(f"Wykryto zmiany w {DB_FILE}. Przeładowuję dane przed zakupem...")
-                bot_data = load_data()
-                last_data_reload_time = current_file_mtime
-        else:
-            if bot_data:
-                bot_data = {}
-                print(f"Plik {DB_FILE} nie istnieje. Zresetowano dane w pamięci.")
-            last_data_reload_time = 0.0
-
-        # Krok 2: Sprawdź, czy użytkownik ma wystarczająco monet
+        # DANE UŻYTKOWNIKA SĄ JUŻ ZAKTUALIZOWANE W get_user_coins
         item_cost = 25
-        current_coins = get_user_coins(user_id)
-        
-        if current_coins >= item_cost:
-            # Krok 3: Wykonaj transakcję
-            new_coins = current_coins - item_cost
-            new_paczki = get_user_paczki(user_id) + 1
+        current_coins = get_user_coins(user_id) # Ta funkcja już przeładowuje dane!
 
-            # Zaktualizuj dane w bot_data
+        if current_coins >= item_cost:
             user_id_str = str(user_id)
-            if user_id_str not in bot_data:
+            if user_id_str not in bot_data: # Inicjalizacja dla nowych użytkowników
                 bot_data[user_id_str] = {
                     "user_name": interaction.user.name,
                     "oprf_coins": 0,
-                    "paczki": 0
+                    "paczki": 0,
+                    "karty": []
                 }
-            bot_data[user_id_str]["oprf_coins"] = new_coins
-            bot_data[user_id_str]["paczki"] = new_paczki
             
-            save_data(bot_data)
+            # Pobieramy paczki po przeładowaniu danych
+            current_paczki = get_user_paczki(user_id) 
+            
+            bot_data[user_id_str]["oprf_coins"] -= item_cost
+            bot_data[user_id_str]["paczki"] += 1
+            
+            save_data(bot_data) # Zapisujemy zmiany
 
             await interaction.response.send_message(
                 f"**Gratulacje, {user_display_name}!** Pomyślnie zakupiono paczkę Kierowców OPRF. "
-                f"Masz teraz `{new_coins}` OPRF Coinsów i `{new_paczki}` paczek.",
+                f"Masz teraz `{bot_data[user_id_str]['oprf_coins']}` OPRF Coinsów i `{bot_data[user_id_str]['paczki']}` paczek.",
                 ephemeral=True
             )
         else:
             await interaction.response.send_message(
-                f"**{user_display_name}**, masz tylko `{current_coins}` OPRF Coinsów. Potrzebujesz `{item_cost}` monet, aby kupić paczkę.",
+                f"**{user_display_name}**, masz tylko `{current_coins}` OPRF Coinsów. Potrzebujesz `{item_cost}` OPRF Coinsów, aby kupić paczkę.",
                 ephemeral=True
             )
-    
-    # --- PRZYPISANIE FUNKCJI CALLBACK DO PRZYCISKU ---
-    # To jest KLUCZOWY ELEMENT, który łączy przycisk z funkcją obsługującą jego kliknięcie.
-    # Bez tej linii, przycisk nie będzie działać.
+
     buy_pack_button.callback = buy_pack_button_callback
 
-
-    # Stwórz Embed
     embed = discord.Embed(
         title="Sklep OPRF 🛒",
         description="Witaj w sklepie discord Official Polish Racing Fortnite!\n"
                     "**Przedmioty**\n"
-                    "- Paczka kierowców OPRF `5 OPRF Coins`",
+                    "- Paczka kierowców OPRF `25 OPRF Coins`",
         color=hex_color("#FFFFFF")
     )
-    
     if thumbnail_url:
         embed.set_thumbnail(url=thumbnail_url)
-    
     embed.set_footer(text="Official Polish Racing Fortnite")
 
-    # Wyślij wiadomość z Embedem i View
     await interaction.response.send_message(embed=embed, view=view)
 
-    
+
+# --- Zmodyfikowana komenda /konto (używa nowej logiki ładowania) ---
 @tree.command(name="konto", description="Wyświetla informacje o koncie!")
 @app_commands.describe(member="Opcjonalnie: Użytkownik, którego konto chcesz sprawdzić.")
 async def konto_command(interaction: discord.Interaction, member: discord.Member = None):
-    # Dostęp do globalnych zmiennych, które mogą być modyfikowane
-    global bot_data, last_data_reload_time
-
-    # KROK 1: Sprawdź, czy plik JSON został zmodyfikowany od ostatniego odczytu
-    if os.path.exists(DB_FILE):
-        current_file_mtime = os.path.getmtime(DB_FILE) # Czas ostatniej modyfikacji pliku
-        if current_file_mtime > last_data_reload_time:
-            print(f"Wykryto zmiany w {DB_FILE}. Przeładowuję dane...")
-            bot_data = load_data() # Przeładuj najnowsze dane z pliku
-            last_data_reload_time = current_file_mtime # Zaktualizuj czas ostatniego przeładowania
-    else:
-        # Jeśli plik z jakiegoś powodu zniknął, zresetuj dane w pamięci
-        if bot_data: # Tylko jeśli bot_data nie jest już puste
-            bot_data = {}
-            print(f"Plik {DB_FILE} nie istnieje. Zresetowano dane w pamięci.")
-        last_data_reload_time = 0.0 # Zresetuj czas modyfikacji
-
-    # KROK 2: Określ, dla kogo wyświetlamy konto
-    target_user = member if member else interaction.user # Użytkownik docelowy (samemu sobie lub podany)
+    # DANE UŻYTKOWNIKA SĄ JUŻ ZAKTUALIZOWANE W get_user_coins itp.
+    target_user = member if member else interaction.user
     user_id = target_user.id
-    target_discord_username = target_user.name # Globalna nazwa użytkownika Discorda
 
-    # KROK 3: Inicjalizacja danych dla użytkownika, jeśli ich jeszcze nie ma lub brakuje pola 'karty'
+    # Inicjalizacja danych dla użytkownika, jeśli ich jeszcze nie ma lub brakuje pola 'karty'
     user_id_str = str(user_id)
-    if user_id_str not in bot_data:
+    if user_id_str not in bot_data: # Używamy bot_data, które zostało zaktualizowane przez get_user_coins/paczki/cards
         bot_data[user_id_str] = {
-            "user_name": target_discord_username,
+            "user_name": target_user.name,
             "oprf_coins": 0,
             "paczki": 0,
-            "karty": [] # WAŻNE: Inicjalizuj 'karty' jako pustą listę dla nowych użytkowników
+            "karty": []
         }
-        save_data(bot_data)
-    # Jeśli użytkownik istnieje, ale brakuje mu pola 'karty' (np. ze starego formatu danych)
+        save_data(bot_data) # Zapisujemy nowego użytkownika
     elif "karty" not in bot_data[user_id_str]:
         bot_data[user_id_str]["karty"] = []
         save_data(bot_data)
 
 
-    # KROK 4: Pobierz aktualne wartości monet, paczek i KART
-    coins = get_user_coins(user_id)
+    coins = get_user_coins(user_id) # Te funkcje już dbają o przeładowanie
     paczki = get_user_paczki(user_id)
-    karty = get_user_cards(user_id) # NOWE: Pobierz listę kart
+    karty = get_user_cards(user_id)
 
-    # Sformatuj listę kart do wyświetlenia
     if karty:
-        cards_display = ", ".join(karty) # Połącz nazwy kart przecinkami
+        cards_display = ", ".join(karty)
     else:
-        cards_display = "Brak kart" # Jeśli lista jest pusta, wyświetl "Brak kart"
+        cards_display = "Brak kart"
 
-    # KROK 5: Przygotuj opis dla wiadomości Embed (ZMODYFIKOWANY)
     description_text = (
         f"**Stan Konta**\n"
         f"- Stan Konta: `{coins}` OPRF Coinsów\n"
         f"**Przedmioty**\n"
         f"- Paczki: `{paczki}`\n"
-        f"- Karty: {cards_display}" # NOWE: Dodaj wyświetlanie kart
+        f"- Karty: {cards_display}"
     )
 
-    # KROK 6: Stwórz Embed z informacjami o koncie
-    # Używamy .display_name dla lepszego wyświetlania na serwerze (np. nick z serwera, nie globalny)
     embed_title = f"Konto Użytkownika: {target_user.name}"
-    
-    # Upewnij się, że używasz funkcji hex_to_discord_color, jeśli tak ją nazwałeś.
-    # W Twoim przykładzie jest hex_color, więc upewnię się, że to działa.
+
     embed = discord.Embed(
         title=embed_title,
         description=description_text,
-        color=hex_color("#FFFFFF") # Zmieniłem na hex_to_discord_color dla spójności
+        color=hex_color("#FFFFFF")
     )
 
-    # Ustaw awatar docelowego użytkownika
     embed.set_thumbnail(url=target_user.avatar.url if target_user.avatar else None)
     embed.set_footer(text="Official Polish Racing Fortnite")
 
-    # KROK 7: Wyślij wiadomość (domyślnie publicznie, bo ephemeral_status = False)
-    ephemeral_status = False 
-    
-    await interaction.response.send_message(embed=embed, ephemeral=ephemeral_status)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
+# --- Zmodyfikowana komenda /paczka (używa nowej logiki ładowania) ---
 @tree.command(name="paczka", description="Wyświetla paczkę do otwarcia.")
 @app_commands.guild_only()
 async def paczka_command(interaction: discord.Interaction):
-    # KROK 1: Sprawdź i przeładuj dane użytkownika
-    global bot_data, last_data_reload_time
-    if os.path.exists(DB_FILE):
-        current_file_mtime = os.path.getmtime(DB_FILE)
-        if current_file_mtime > last_data_reload_time:
-            print(f"Wykryto zmiany w {DB_FILE}. Przeładowuję dane użytkownika przed otwarciem paczki...")
-            bot_data = load_data()
-            last_data_reload_time = current_file_mtime
-    else:
-        if bot_data:
-            bot_data = {}
-            print(f"Plik {DB_FILE} nie istnieje. Zresetowano dane użytkownika.")
-        last_data_reload_time = 0.0
-
     user_id = interaction.user.id
-    current_paczki = get_user_paczki(user_id)
+    current_paczki = get_user_paczki(user_id) # Ta funkcja już przeładowuje dane!
 
     if current_paczki < 1:
         await interaction.response.send_message(
@@ -307,7 +326,6 @@ async def paczka_command(interaction: discord.Interaction):
         )
         return
 
-    # KROK 2: Stwórz przycisk "Otwórz Paczkę"
     open_pack_button = discord.ui.Button(
         label="Otwórz Paczkę",
         style=discord.ButtonStyle.success,
@@ -315,31 +333,15 @@ async def paczka_command(interaction: discord.Interaction):
         custom_id="paczkaopen"
     )
 
-    # KROK 3: Stwórz View i dodaj przycisk
     view = discord.ui.View(timeout=180)
     view.add_item(open_pack_button)
 
-    # KROK 4: Definiuj funkcję callback dla przycisku "Otwórz Paczkę"
     async def open_pack_button_callback(interaction: discord.Interaction):
-        # This function is executed when the button is clicked
         user_id = interaction.user.id
-        user_display_name = interaction.user.display_name # user_display_name IS DEFINED HERE!
+        user_display_name = interaction.user.display_name
 
-        # --- Ponowne przeładowanie danych użytkownika przed transakcją (bezpieczeństwo) ---
-        global bot_data, last_data_reload_time
-        if os.path.exists(DB_FILE):
-            current_file_mtime = os.path.getmtime(DB_FILE)
-            if current_file_mtime > last_data_reload_time:
-                print(f"Wykryto zmiany w {DB_FILE}. Przeładowuję dane użytkownika przed otwarciem paczki...")
-                bot_data = load_data()
-                last_data_reload_time = current_file_mtime
-        else:
-            if bot_data:
-                bot_data = {}
-                print(f"Plik {DB_FILE} nie istnieje. Zresetowano dane w pamięci.")
-            last_data_reload_time = 0.0
-
-        current_paczki_after_check = get_user_paczki(user_id)
+        # DANE UŻYTKOWNIKA SĄ JUŻ ZAKTUALIZOWANE PRZEZ get_user_paczki
+        current_paczki_after_check = get_user_paczki(user_id) # Ponowne sprawdzenie po kliknięciu
 
         if current_paczki_after_check < 1:
             await interaction.response.send_message(
@@ -348,8 +350,9 @@ async def paczka_command(interaction: discord.Interaction):
             )
             return
 
-        # KROK 5: Odejmij paczkę od użytkownika
         user_id_str = str(user_id)
+        # Te sprawdzenia są redundantne, jeśli get_user_paczki/cards zawsze inicjalizuje,
+        # ale nie zaszkodzą, jeśli coś by się zmieniało w przyszłości.
         if user_id_str not in bot_data:
             bot_data[user_id_str] = {
                 "user_name": interaction.user.name,
@@ -362,14 +365,14 @@ async def paczka_command(interaction: discord.Interaction):
 
         bot_data[user_id_str]["paczki"] -= 1
 
-        # KROK 6: Sprawdź i przeładuj dane kierowców (jeśli plik się zmienił)
-        global all_drivers_data
+        # KROK: Sprawdź i przeładuj dane kierowców (jeśli plik się zmienił)
+        global all_drivers_data, last_drivers_load_time # Dodaj last_drivers_load_time tutaj
         if os.path.exists(DRIVERS_FILE):
             current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
-            if not all_drivers_data or current_drivers_mtime > getattr(paczka_command, '_last_drivers_load_time', 0):
-                 print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców...")
-                 all_drivers_data = load_drivers_data()
-                 paczka_command._last_drivers_load_time = current_drivers_mtime 
+            if current_drivers_mtime > last_drivers_load_time: # Użyj last_drivers_load_time
+                print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców przed losowaniem...")
+                all_drivers_data = load_drivers_data()
+                last_drivers_load_time = current_drivers_mtime
         else:
             print(f"Plik {DRIVERS_FILE} nie istnieje. Nie ma kierowców do wylosowania.")
             await interaction.response.send_message(
@@ -385,50 +388,41 @@ async def paczka_command(interaction: discord.Interaction):
             )
             return
 
-        # KROK 7: Wylosuj losowego kierowcę
         chosen_driver = random.choice(all_drivers_data)
-
-        # KROK 8: Dodaj wylosowaną kartę do listy kart użytkownika
         bot_data[user_id_str]["karty"].append(chosen_driver['kierowca'])
 
-        # --- ZAPISUJEMY ZMODYFIKOWANE DANE ---
         save_data(bot_data)
 
-        # KROK 9: Stwórz Embed z informacjami o wylosowanym kierowcy (publiczny)
         reward_embed = discord.Embed(
             title=f"Karta Kierowcy - {chosen_driver['kierowca']}",
             description=(
                 f"**Informacje Kierowcy:**\n"
                 f"`Numer` - #{chosen_driver['numer']}\n"
                 f"`Drużyna` - {chosen_driver['druzyna']}\n"
-                f"`Ocena Ogólna` - {chosen_driver['ocena_ogolna']}"
+                f"`Ocena Ogólna` - {chosen_driver['ocena_ogolna'] if chosen_driver['ocena_ogolna'] is not None else 'Brak oceny'}"
             ),
             color=hex_color("#FFFFFF")
         )
-        
+
         if 'link_thumbnail' in chosen_driver and chosen_driver['link_thumbnail']:
             reward_embed.set_thumbnail(url=chosen_driver['link_thumbnail'])
         if 'link' in chosen_driver and chosen_driver['link']:
             reward_embed.set_image(url=chosen_driver['link'])
 
         reward_embed.set_author(
-            name=f"Otwarte przez - {user_display_name}", # Correctly use user_display_name here
+            name=f"Otwarte przez - {user_display_name}",
             icon_url=interaction.user.avatar.url if interaction.user.avatar else None
         )
         reward_embed.set_footer(text="Official Polish Racing Fortnite")
 
-        # The 'content' part here is for the reward message, which IS inside the callback
         await interaction.response.send_message(
-            content=f"**{user_display_name}** otworzył paczkę i wylosował:", # This is fine!
+            content=f"**{user_display_name}** otworzył paczkę i wylosował:",
             embed=reward_embed,
             ephemeral=False
         )
 
-
-    # KROK 5 (ponownie): Przypisz callback do przycisku
     open_pack_button.callback = open_pack_button_callback
 
-    # KROK 6: Stwórz początkowy Embed "Paczka 📦"
     initial_embed = discord.Embed(
         title="Paczka 📦",
         description="Twoja paczka stoi przed tobą \ni czeka aż ją otworzysz!",
@@ -437,9 +431,6 @@ async def paczka_command(interaction: discord.Interaction):
     initial_embed.set_image(url="https://cdn.discordapp.com/attachments/1246818926604582984/1387580177017602090/zlota_paczka.png?ex=685ddc3e&is=685c8abe&hm=f557af444b25babb8385b5e3be6fa617bae30e12a65b47114e0ed9b7e9c4787e&")
     initial_embed.set_footer(text="Official Polish Racing Fortnite")
 
-    # KROK 7: Wyślij początkową wiadomość z Embedem i przyciskiem
-    # This message is sent BEFORE the button is clicked, so user_display_name is not available here.
-    # We remove the 'content' argument that caused the error.
     await interaction.response.send_message(embed=initial_embed, view=view, ephemeral=False)
 
     
@@ -457,7 +448,8 @@ async def pomoc_command(interaction: discord.Interaction):
             "`Prefix - ;`\n"
             "ping - pokazuje opóźnienie bota i sprawdza jego aktywność\n"
             "wnioski - wysyła zbiór wniosków które można wysłać (tylko admin)\n"
-            "msg - bot wyśle wiadomość jaką będziesz chciał (tylko admin)\n\n"
+            "msg - bot wyśle wiadomość jaką będziesz chciał (tylko admin)\n"
+            "kuchenko - wysyła rare footage śpiącego Kuchenko\n\n"
             "`Ukośnik - /`\n"
             "pomoc - wyświetla kartę pomocy bota\n"
             "twitter - pozwala opublikować posta na kanale <#1282096776928559246>\n"
