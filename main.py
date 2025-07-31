@@ -8,6 +8,7 @@ import random
 import json
 import os
 import time
+import re
 
 # --- Funkcje pomocnicze ---
 def hex_color(hex_str):
@@ -138,7 +139,25 @@ async def on_ready():
     print(f'{bot.user} jest online!')
     activity = discord.Activity(type=discord.ActivityType.listening, name="/pomoc")
     await bot.change_presence(activity=activity)
+    
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        return
 
+    SPECJALNY_UZYTKOWNIK_ID = 784336822104227841
+
+    if message.author.id == SPECJALNY_UZYTKOWNIK_ID:
+        tresc = message.content.lower()
+        slowa_w_wiadomosci = set(re.findall(r'\w+', tresc))
+        wymagane_slowa = {"psem", "spacer", "pies"}
+
+        # Sprawdza, czy przynajmniej jedno słowo z wymagane_slowa jest w slowa_w_wiadomosci
+        if wymagane_slowa.intersection(slowa_w_wiadomosci):
+            await message.reply("https://cdn.discordapp.com/attachments/1187471588535320596/1397663795655999549/kubon.gif")
+
+    await bot.process_commands(message)
+    
 # --- Przykładowe komendy (MUSISZ DODAĆ SWOJE KOMENDY TUTAJ) ---
 @bot.command(name='ping')
 async def ping(ctx):
@@ -154,42 +173,116 @@ async def msg(ctx, *, message_content: str):
     await ctx.send(message_content)
     await ctx.message.delete()
 
-COOLDOWN_SECONDS = 3600
-last_kuchenko_use_time = 0
-@bot.command(name='kuchenko')
-async def kuchenko_command(ctx):
+@bot.command(name='coinsy')
+async def coinsy(ctx, value: int):
     """
-    Wysyła wiadomość o treści 'Wiadomość, którą chcesz wysłać!' po wpisaniu ;kuchenko.
-    Komenda ma globalny cooldown ustawiony na COOLDOWN_SECONDS, zarządzany przez moduł time.
+    Komenda dla administratorów do wysyłania coinsów do zebrania przez użytkowników.
     """
-    global last_kuchenko_use_time # Deklarujemy, że będziemy modyfikować globalną zmienną
+    # Sprawdzenie czy użytkownik ma uprawnienia administratora
+    if not ctx.author.guild_permissions.administrator:
+        print(f"Użytkownik {ctx.author} (ID: {ctx.author.id}) próbował użyć komendy '{ctx.command.name}', ale nie posiada uprawnień administratora.")
+        return
 
-    current_time = time.time() # Pobierz aktualny czas w sekundach od epoki
+    # Sprawdzenie czy wartość jest dodatnia
+    if value <= 0:
+        await ctx.send("Wartość musi być większa od 0!", delete_after=5)
+        return
 
-    # Sprawdzamy, czy minął już wystarczający czas od ostatniego użycia
-    if current_time < last_kuchenko_use_time + COOLDOWN_SECONDS:
-        remaining_seconds = int((last_kuchenko_use_time + COOLDOWN_SECONDS) - current_time)
+    # Usunięcie oryginalnej wiadomości z komendą
+    await ctx.message.delete()
 
-        # Formatowanie czasu dla lepszej czytelności
-        if remaining_seconds >= 3600: # Godziny
-            hours = remaining_seconds // 3600
-            minutes = (remaining_seconds % 3600) // 60
-            seconds = remaining_seconds % 60
-            time_left_str = f"{hours}h {minutes}m {seconds}s"
-        elif remaining_seconds >= 60: # Minuty
-            minutes = remaining_seconds // 60
-            seconds = remaining_seconds % 60
-            time_left_str = f"{minutes}m {seconds}s"
-        else: # Sekundy
-            time_left_str = f"{seconds}s"
+    # Tworzenie przycisku do zebrania coinsów
+    collect_button = discord.ui.Button(
+        label="Zbierz",
+        style=discord.ButtonStyle.success,
+        emoji="🪙",
+        custom_id=f"collect_coins_{value}"
+    )
 
-        await ctx.send(f"Ta komenda ma globalny cooldown! Spróbuj ponownie za **{time_left_str}**.", ephemeral=True)
-        return # Ważne: Zakończ działanie funkcji, jeśli komenda jest na cooldownie
+    view = discord.ui.View(timeout=None)  # Bez timeout, żeby przycisk działał długo
+    view.add_item(collect_button)
 
-    # Jeśli komenda nie jest na cooldownie, pozwól jej się wykonać
-    last_kuchenko_use_time = current_time # Zaktualizuj czas ostatniego użycia
-    await ctx.send("https://cdn.discordapp.com/attachments/1229860230813450361/1382767013432397854/494838144_1770082443604562_1240250344963369441_n.gif?ex=6873e6a2&is=68729522&hm=9b85c900eb1562fc95b29a192e6f8a3715b179fd8e16487158d0719bb03d01d5&")
+    # Lista użytkowników którzy już zebrali coinsy (żeby nie mogli zebrać drugi raz)
+    collected_users = set()
 
+    async def collect_button_callback(interaction: discord.Interaction):
+        user_id = interaction.user.id
+        user_mention = interaction.user.mention
+
+        # Sprawdzenie czy użytkownik już zebrał coinsy
+        if user_id in collected_users:
+            await interaction.response.send_message(
+                "Już zebrałeś te coinsy!", 
+                ephemeral=True
+            )
+            return
+
+        # Dodanie użytkownika do listy tych którzy zebrali
+        collected_users.add(user_id)
+
+        # Przeładowanie danych użytkownika
+        user_id_str = str(user_id)
+        global bot_data, last_data_reload_time
+        if os.path.exists(DB_FILE):
+            current_file_mtime = os.path.getmtime(DB_FILE)
+            if current_file_mtime > last_data_reload_time:
+                bot_data = load_data()
+                last_data_reload_time = current_file_mtime
+
+        # Inicjalizacja danych dla nowego użytkownika
+        if user_id_str not in bot_data:
+            bot_data[user_id_str] = {
+                "user_name": interaction.user.name,
+                "oprf_coins": 0,
+                "paczki": 0,
+                "karty": []
+            }
+
+        # Dodanie coinsów
+        bot_data[user_id_str]["oprf_coins"] += value
+        
+        # Zapisanie danych
+        save_data(bot_data)
+
+        # Utworzenie zaktualizowanego embeda
+        updated_embed = discord.Embed(
+            title="Monety zebrane!",
+            description=f"{value} OPRF Coinsów zebrał {user_mention}",
+            color=hex_color("#FFFFFF")
+        )
+
+        # Wysłanie efemerycznej wiadomości do użytkownika
+        await interaction.response.send_message(
+            f"**Gratulacje!** Pomyślnie zebrałeś `{value}` OPRF Coinsów!",
+            ephemeral=True
+        )
+        
+        # Wyłączenie przycisku
+        collect_button.disabled = True
+        
+        # Aktualizacja oryginalnej wiadomości (tej z embedem "Zbierz X OPRF Coinsów")
+        await interaction.message.edit(embed=updated_embed, view=view)
+
+    collect_button.callback = collect_button_callback
+
+    # Tworzenie początkowego embeda
+    initial_embed = discord.Embed(
+        title=f"Zbierz {value} OPRF Coinsów",
+        color=hex_color("#FFFFFF")
+    )
+
+    # Wysłanie wiadomości
+    await ctx.send(embed=initial_embed, view=view)
+    
+@tree.command(name="pitstop-game", description="Pobierz grę OPRF Pitstop Game")
+async def pitstop_game(interaction: discord.Interaction):
+    """
+    Prosta komenda ukośnikowa, która odpowiada efemeryczną wiadomością.
+    """
+    user_mention = interaction.user.mention  # Pobiera oznaczenie użytkownika
+    response_content = f"`Link`: https://kwiatek909.github.io/oprf-website/ \n{user_mention} życzymy Ci miłej zabawy!"
+    await interaction.response.send_message(response_content, ephemeral=True)
+    
 # --- Zmodyfikowana komenda /sklep (używa nowej logiki ładowania) ---
 @tree.command(name="sklep", description="Odwiedź sklep OPRF!")
 @app_commands.guild_only()
@@ -259,7 +352,7 @@ async def sklep_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
-# --- Zmodyfikowana komenda /konto (używa nowej logiki ładowania) ---
+# --- Zmodyfikowana komenda /konto (z oceną ogólną przy kartach) ---
 @tree.command(name="konto", description="Wyświetla informacje o koncie!")
 @app_commands.describe(member="Opcjonalnie: Użytkownik, którego konto chcesz sprawdzić.")
 async def konto_command(interaction: discord.Interaction, member: discord.Member = None):
@@ -281,13 +374,37 @@ async def konto_command(interaction: discord.Interaction, member: discord.Member
         bot_data[user_id_str]["karty"] = []
         save_data(bot_data)
 
-
     coins = get_user_coins(user_id) # Te funkcje już dbają o przeładowanie
     paczki = get_user_paczki(user_id)
     karty = get_user_cards(user_id)
 
+    # Sprawdź i przeładuj dane kierowców (jeśli plik się zmienił)
+    global all_drivers_data, last_drivers_load_time
+    if os.path.exists(DRIVERS_FILE):
+        current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
+        if current_drivers_mtime > last_drivers_load_time:
+            all_drivers_data = load_drivers_data()
+            last_drivers_load_time = current_drivers_mtime
+
+    # Tworzenie listy kart z oceną ogólną
     if karty:
-        cards_display = ", ".join(karty)
+        cards_with_rating = []
+        for karta in karty:
+            # Znajdź kierowcę w danych all_drivers_data
+            driver_data = None
+            for driver in all_drivers_data:
+                if driver['kierowca'] == karta:
+                    driver_data = driver
+                    break
+            
+            # Jeśli znaleziono dane kierowcy, dodaj ocenę ogólną
+            if driver_data and driver_data.get('ocena_ogolna') is not None:
+                cards_with_rating.append(f"{karta} ({driver_data['ocena_ogolna']})")
+            else:
+                # Jeśli nie znaleziono danych lub brak oceny, wyświetl tylko nazwę
+                cards_with_rating.append(f"{karta} (Brak oceny)")
+        
+        cards_display = ", ".join(cards_with_rating)
     else:
         cards_display = "Brak kart"
 
@@ -428,7 +545,7 @@ async def paczka_command(interaction: discord.Interaction):
         description="Twoja paczka stoi przed tobą \ni czeka aż ją otworzysz!",
         color=hex_color("#FFFFFF")
     )
-    initial_embed.set_image(url="https://cdn.discordapp.com/attachments/1246818926604582984/1387580177017602090/zlota_paczka.png?ex=685ddc3e&is=685c8abe&hm=f557af444b25babb8385b5e3be6fa617bae30e12a65b47114e0ed9b7e9c4787e&")
+    initial_embed.set_image(url="https://cdn.discordapp.com/attachments/1268199863636594788/1399530452141998100/golden_pack_2.png?ex=688955cd&is=6888044d&hm=eb807ba604a5fd8979b66077744205abe240b32674b8038bb3a9eba984723f05&")
     initial_embed.set_footer(text="Official Polish Racing Fortnite")
 
     await interaction.response.send_message(embed=initial_embed, view=view, ephemeral=False)
@@ -449,7 +566,6 @@ async def pomoc_command(interaction: discord.Interaction):
             "ping - pokazuje opóźnienie bota i sprawdza jego aktywność\n"
             "wnioski - wysyła zbiór wniosków które można wysłać (tylko admin)\n"
             "msg - bot wyśle wiadomość jaką będziesz chciał (tylko admin)\n"
-            "kuchenko - wysyła rare footage śpiącego Kuchenko\n\n"
             "`Ukośnik - /`\n"
             "pomoc - wyświetla kartę pomocy bota\n"
             "twitter - pozwala opublikować posta na kanale <#1282096776928559246>\n"
@@ -459,6 +575,7 @@ async def pomoc_command(interaction: discord.Interaction):
             "konto - wyświetla informacje o koncie\n"
             "sklep - pokazuje sklep OPRF\n"
             "paczka - otwiera paczkę kierowców\n"
+            "pitstop-game - udostępnia link do pobrania gry OPRF Pitstop Game\n"
         ),
         color=hex_color("#FFFFFF")
     )
