@@ -290,7 +290,7 @@ async def sklep_command(interaction: discord.Interaction):
     thumbnail_url = interaction.guild.icon.url if interaction.guild and interaction.guild.icon else None
 
     buy_pack_button = discord.ui.Button(
-        label="Kup paczkę Kierowców OPRF",
+        label="Kup paczkę Kierowcy OPRF",
         style=discord.ButtonStyle.success,
         emoji="📦",
         custom_id="zakuppaczka"
@@ -326,7 +326,7 @@ async def sklep_command(interaction: discord.Interaction):
             save_data(bot_data) # Zapisujemy zmiany
 
             await interaction.response.send_message(
-                f"**Gratulacje, {user_display_name}!** Pomyślnie zakupiono paczkę Kierowców OPRF. "
+                f"**Gratulacje, {user_display_name}!** Pomyślnie zakupiono paczkę Kierowcy OPRF. "
                 f"Masz teraz `{bot_data[user_id_str]['oprf_coins']}` OPRF Coinsów i `{bot_data[user_id_str]['paczki']}` paczek.",
                 ephemeral=True
             )
@@ -342,7 +342,7 @@ async def sklep_command(interaction: discord.Interaction):
         title="Sklep OPRF 🛒",
         description="Witaj w sklepie discord Official Polish Racing Fortnite!\n"
                     "**Przedmioty**\n"
-                    "- Paczka kierowców OPRF `25 OPRF Coins`",
+                    "- Paczka Kierowcy OPRF `25 OPRF Coins`",
         color=hex_color("#FFFFFF")
     )
     if thumbnail_url:
@@ -550,6 +550,211 @@ async def paczka_command(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=initial_embed, view=view, ephemeral=False)
 
+@tree.command(name="lista-paczka", description="Wyświetla listę dostępnych kart w paczce, posortowanych od najlepszych.")
+@app_commands.guild_only()
+async def lista_paczka_command(interaction: discord.Interaction):
+    """
+    Wyświetla ranking kierowców dostępnych w paczkach, posortowanych po ocenie ogólnej.
+    """
+    global all_drivers_data, last_drivers_load_time
+
+    # Przeładowanie danych kierowców, jeśli plik uległ zmianie
+    if os.path.exists(DRIVERS_FILE):
+        current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
+        if current_drivers_mtime > last_drivers_load_time:
+            print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców...")
+            all_drivers_data = load_drivers_data()
+            last_drivers_load_time = current_drivers_mtime
+    else:
+        await interaction.response.send_message(
+            "Wystąpił błąd: brak danych o kierowcach. Skontaktuj się z administratorem.",
+            ephemeral=True
+        )
+        return
+
+    if not all_drivers_data:
+        await interaction.response.send_message(
+            "Brak dostępnych kart kierowców do wyświetlenia. Skontaktuj się z administratorem.",
+            ephemeral=True
+        )
+        return
+
+    # Sortowanie kierowców malejąco po ocenie ogólnej
+    sorted_drivers = sorted(all_drivers_data, key=lambda d: d.get('ocena_ogolna', 0), reverse=True)
+
+    # Tworzenie listy do opisu embeda
+    drivers_list = []
+    for driver in sorted_drivers:
+        ocena = driver.get('ocena_ogolna', 'Brak')
+        drivers_list.append(f"{driver['kierowca']} - `{ocena}` OVR")
+    
+    description_text = "\n".join(drivers_list)
+
+    embed = discord.Embed(
+        title="Lista zawartości paczki",
+        description=description_text,
+        color=hex_color("#FFFFFF")
+    )
+    
+    embed.set_footer(text="Official Polish Racing Fortnite")
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+@tree.command(name="ranking", description="Wyświetla top 10 najbardziej wartościowych kont graczy.")
+@app_commands.guild_only()
+async def ranking_command(interaction: discord.Interaction):
+    """
+    Wyświetla ranking graczy na podstawie wartości ich kont (paczki, coinsy i karty).
+    """
+    global bot_data, last_data_reload_time, all_drivers_data, last_drivers_load_time
+
+    # Upewnij się, że dane użytkowników są aktualne
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
+            
+    # Upewnij się, że dane kierowców są aktualne
+    if os.path.exists(DRIVERS_FILE):
+        current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
+        if current_drivers_mtime > last_drivers_load_time:
+            all_drivers_data = load_drivers_data()
+            last_drivers_load_time = current_drivers_mtime
+
+    # Definicja wartości punktowej: 1 paczka = 25 coinsów, 1 karta = 25 coinsów
+    item_value = 25
+
+    # Obliczanie wartości konta dla każdego użytkownika
+    account_values = []
+    for user_id_str, user_data in bot_data.items():
+        coins = user_data.get("oprf_coins", 0)
+        paczki = user_data.get("paczki", 0)
+        karty = user_data.get("karty", [])
+        
+        # Całkowita wartość konta = coinsy + (paczki * wartość_paczki) + (liczba_kart * wartość_karty)
+        total_value = coins + (paczki * item_value) + (len(karty) * item_value)
+        
+        # Przygotowanie listy kart do wyświetlenia w embedzie
+        cards_display = ", ".join(karty) if karty else "Brak"
+        
+        account_values.append({
+            "user_id": int(user_id_str),
+            "user_name": user_data.get("user_name", "Nieznany Użytkownik"),
+            "oprf_coins": coins,
+            "paczki": paczki,
+            "karty_display": cards_display,
+            "total_value": total_value
+        })
+
+    # Sortowanie listy według wartości konta, malejąco
+    sorted_accounts = sorted(account_values, key=lambda x: x["total_value"], reverse=True)
+
+    # Tworzenie opisu embeda dla top 10
+    description_lines = []
+    for i, user in enumerate(sorted_accounts[:10]):
+        # Użycie mentonu, jeśli użytkownik jest na serwerze
+        try:
+            member = interaction.guild.get_member(user["user_id"])
+            user_display = member.mention if member else user["user_name"]
+        except (AttributeError, KeyError):
+            user_display = user["user_name"]
+            
+        description_lines.append(
+            f"**{i + 1}**. {user_display} - `{user['paczki']}` paczek, `{user['oprf_coins']}` OPRF Coinsów, Karty: {user['karty_display']}"
+        )
+    
+    description_text = "\n".join(description_lines)
+    
+    if not description_text:
+        description_text = "Brak danych o kontach do wyświetlenia."
+
+    embed = discord.Embed(
+        title="Top 10 najbardziej wartościowych kont",
+        description=description_text,
+        color=hex_color("#FFFFFF")
+    )
+    
+    if interaction.guild and interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    
+    embed.set_footer(text="Official Polish Racing Fortnite")
+
+    await interaction.response.send_message(embed=embed, ephemeral=False)
+
+@tree.command(name="karta", description="Wyświetla posiadaną kartę.")
+@app_commands.describe(nazwa="Nazwa kierowcy, którego kartę chcesz wyświetlić.")
+@app_commands.guild_only()
+async def karta_command(interaction: discord.Interaction, nazwa: str):
+    """
+    Wyświetla szczegóły karty kierowcy, jeśli użytkownik ją posiada.
+    """
+    user_id = interaction.user.id
+    user_id_str = str(user_id)
+    user_cards = get_user_cards(user_id)  # Ta funkcja przeładowuje dane użytkownika
+
+    # Normalizuj wejście użytkownika, aby było case-insensitive
+    nazwa_lower = nazwa.lower()
+    
+    # Przeładuj dane kierowców, jeśli są nieaktualne
+    global all_drivers_data, last_drivers_load_time
+    if os.path.exists(DRIVERS_FILE):
+        current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
+        if current_drivers_mtime > last_drivers_load_time:
+            all_drivers_data = load_drivers_data()
+            last_drivers_load_time = current_drivers_mtime
+
+    # Sprawdź, czy użytkownik posiada kartę
+    if nazwa not in user_cards:
+        # Sprawdź również normalizowaną nazwę
+        found = False
+        for card_name in user_cards:
+            if card_name.lower() == nazwa_lower:
+                nazwa = card_name  # Użyj poprawnej nazwy z bazy danych
+                found = True
+                break
+        
+        if not found:
+            await interaction.response.send_message(
+                f"Nie posiadasz karty kierowcy o nazwie `{nazwa}`.",
+                ephemeral=True
+            )
+            return
+
+    # Znajdź dane kierowcy w globalnej liście
+    driver_data = None
+    for driver in all_drivers_data:
+        if driver['kierowca'].lower() == nazwa_lower:
+            driver_data = driver
+            break
+
+    if not driver_data:
+        await interaction.response.send_message(
+            f"Wystąpił błąd: nie znaleziono danych dla kierowcy `{nazwa}`. Skontaktuj się z administratorem.",
+            ephemeral=True
+        )
+        return
+
+    # Utwórz embed z danymi kierowcy
+    card_embed = discord.Embed(
+        title=f"Karta Kierowcy - {driver_data['kierowca']}",
+        description=(
+            f"**Informacje Kierowcy:**\n"
+            f"`Numer` - #{driver_data['numer']}\n"
+            f"`Drużyna` - {driver_data['druzyna']}\n"
+            f"`Ocena Ogólna` - {driver_data['ocena_ogolna'] if driver_data.get('ocena_ogolna') is not None else 'Brak oceny'}"
+        ),
+        color=hex_color("#FFFFFF")
+    )
+
+    if 'link_thumbnail' in driver_data and driver_data['link_thumbnail']:
+        card_embed.set_thumbnail(url=driver_data['link_thumbnail'])
+    if 'link' in driver_data and driver_data['link']:
+        card_embed.set_image(url=driver_data['link'])
+
+    card_embed.set_footer(text="Official Polish Racing Fortnite")
+
+    await interaction.response.send_message(embed=card_embed, ephemeral=False)
     
 @tree.command(name="pomoc", description="Wyświetla kartę pomocy bota")
 async def pomoc_command(interaction: discord.Interaction):
@@ -574,8 +779,11 @@ async def pomoc_command(interaction: discord.Interaction):
             "kontrakt - wysyła kontrakt do FIA\n"
             "konto - wyświetla informacje o koncie\n"
             "sklep - pokazuje sklep OPRF\n"
-            "paczka - otwiera paczkę kierowców\n"
+            "paczka - otwiera paczkę kierowcy\n"
             "pitstop-game - udostępnia link do pobrania gry OPRF Pitstop Game\n"
+            "lista-paczka - wyświetla co może znajdować się w paczce\n"
+            "ranking - wyświetla top 10 najbogatszych kont biorąc pod uwagę ilość paczek, coinsów i karty\n"
+            "karta - wyświetla posiadaną kartę\n"
         ),
         color=hex_color("#FFFFFF")
     )
