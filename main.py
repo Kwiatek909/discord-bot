@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import asyncio
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import random
 import json
 import os
@@ -25,6 +25,48 @@ tree = bot.tree
 # --- Nazwy plików bazy danych ---
 DB_FILE = 'data.json'
 DRIVERS_FILE = 'drivers.json'
+
+CODES_FILE = 'codes.json'
+MARKET_FILE = 'rynek.json'
+
+
+def load_market():
+    """Ładuje dane rynku z pliku JSON."""
+    if os.path.exists(MARKET_FILE):
+        try:
+            with open(MARKET_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Ostrzeżenie: Plik {MARKET_FILE} jest uszkodzony lub pusty. Zwracam pustą listę.")
+            return []
+    return []
+
+def save_market(market_data):
+    """Zapisuje dane rynku do pliku JSON."""
+    with open(MARKET_FILE, 'w', encoding='utf-8') as f:
+        json.dump(market_data, f, indent=4, ensure_ascii=False)
+
+last_coin_claim_time = None
+COOLDOWN_DURATION = timedelta(hours=1)
+
+def load_codes():
+    if os.path.exists(CODES_FILE):
+        try:
+            with open(CODES_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Błąd: {CODES_FILE} jest uszkodzony.")
+    return []
+
+def save_codes(codes):
+    with open(CODES_FILE, 'w', encoding='utf-8') as f:
+        json.dump(codes, f, indent=4)
+        
+def load_links():
+    if not os.path.exists("link.json"):
+        return []
+    with open("link.json", "r") as f:
+        return json.load(f)
 
 # --- Globalne zmienne do przechowywania danych i ich czasów modyfikacji ---
 bot_data = {}
@@ -755,6 +797,426 @@ async def karta_command(interaction: discord.Interaction, nazwa: str):
     card_embed.set_footer(text="Official Polish Racing Fortnite")
 
     await interaction.response.send_message(embed=card_embed, ephemeral=False)
+
+@tree.command(name="zrealizuj-kod", description="Wykorzystaj specjalny kod i otrzymaj nagrodę!")
+@app_commands.guild_only()
+async def wykorzystaj_kod(interaction: discord.Interaction):
+    class KodModal(discord.ui.Modal, title="Wprowadź kod"):
+        kod = discord.ui.TextInput(label="Kod", placeholder="Wprowadź kod (np. EZG245)", required=True, max_length=20)
+
+        async def on_submit(self, interaction_modal: discord.Interaction):
+            code_entered = self.kod.value.strip().upper()
+            user_id = str(interaction_modal.user.id)
+
+            codes = load_codes()
+            matching_code = next((c for c in codes if c["code"].upper() == code_entered), None)
+
+            if not matching_code:
+                await interaction_modal.response.send_message(
+                    f"Kod `{code_entered}` jest nieprawidłowy lub został już wykorzystany.",
+                    ephemeral=True
+                )
+                return
+
+            value = matching_code["value"]
+
+            # Przeładuj dane
+            global bot_data, last_data_reload_time
+            if os.path.exists(DB_FILE):
+                current_file_mtime = os.path.getmtime(DB_FILE)
+                if current_file_mtime > last_data_reload_time:
+                    bot_data = load_data()
+                    last_data_reload_time = current_file_mtime
+
+            # Inicjalizacja użytkownika jeśli potrzeba
+            if user_id not in bot_data:
+                bot_data[user_id] = {
+                    "user_name": interaction_modal.user.name,
+                    "oprf_coins": 0,
+                    "paczki": 0,
+                    "karty": []
+                }
+
+            # Dodaj coinsy
+            bot_data[user_id]["oprf_coins"] += value
+            save_data(bot_data)
+
+            # Usuń kod z listy
+            codes = [c for c in codes if c["code"].upper() != code_entered]
+            save_codes(codes)
+
+            await interaction_modal.response.send_message(
+                f"Pomyślnie wykorzystano kod `{code_entered}`!\nOtrzymujesz `{value}` OPRF Coinsów.",
+                ephemeral=True
+            )
+            print(f"Wykorzystano kod {code_entered} na {value} OPRF Coinsów przez {interaction_modal.user.name} (ID: {interaction_modal.user.id})")
+
+    await interaction.response.send_modal(KodModal())
+
+@tree.command(name="link", description="Spróbuj zdobyć link który pozwoli ci odebrać nagrody")
+@app_commands.guild_only()
+async def coiny_command(interaction: discord.Interaction):
+    global last_coin_claim_time
+
+    now = datetime.now(timezone.utc)
+
+    # Sprawdzenie cooldownu
+    if last_coin_claim_time and now - last_coin_claim_time < COOLDOWN_DURATION:
+        remaining = COOLDOWN_DURATION - (now - last_coin_claim_time)
+        hours, remainder = divmod(int(remaining.total_seconds()), 3600)
+        minutes = remainder // 60
+
+        await interaction.response.send_message(
+            f"Ta komenda została już użyta. Spróbuj ponownie za **{hours}h {minutes}min**.",
+            ephemeral=True
+        )
+        return
+
+    # Załaduj linki
+    links = load_links()
+    if not links:
+        await interaction.response.send_message(
+            "Brak dostępnych linków. Skontaktuj się z administratorem.",
+            ephemeral=True
+        )
+        return
+
+    # Wylosuj link
+    selected_link = random.choice(links)
+
+    # Stwórz embed
+    embed = discord.Embed(
+        title="Spróbuj zdobyć wartościowy link!",
+        description="Poniżej znajduje się link który może \nprzekierować cię na stronę z kodem.",
+        color=0xFFFFFF
+    )
+    embed.set_footer(text="Official Polish Racing Fortnite")
+
+    # Stwórz przycisk z linkiem
+    view = discord.ui.View()
+    button = discord.ui.Button(
+        label="Link",
+        style=discord.ButtonStyle.link,
+        url=selected_link,
+        emoji="🔗"
+    )
+    view.add_item(button)
+
+    # Wyślij wiadomość z embedem i przyciskiem
+    await interaction.response.send_message(embed=embed, view=view)
+
+    # Zaktualizuj czas ostatniego użycia
+    last_coin_claim_time = now
+
+@tree.command(name="rynek-sprzedaj", description="Wystaw kartę na rynek")
+@app_commands.describe(
+    nazwa="Nazwa kierowcy, którego kartę chcesz sprzedać",
+    cena="Cena w OPRF Coinsach"
+)
+@app_commands.guild_only()
+async def rynek_sprzedaj_command(interaction: discord.Interaction, nazwa: str, cena: int):
+    """
+    Wystawia kartę użytkownika na rynek.
+    """
+    user_id = interaction.user.id
+    user_id_str = str(user_id)
+    
+    # Sprawdzenie czy cena jest dodatnia
+    if cena <= 30:
+        await interaction.response.send_message(
+            "Cena musi być większa od 30 OPRF Coinsów!",
+            ephemeral=True
+        )
+        return
+    
+    # Pobierz karty użytkownika
+    user_cards = get_user_cards(user_id)
+    
+    # Normalizuj nazwę do wyszukiwania
+    nazwa_lower = nazwa.lower()
+    found_card = None
+    
+    # Znajdź kartę w kolekcji użytkownika
+    for card_name in user_cards:
+        if card_name.lower() == nazwa_lower:
+            found_card = card_name
+            break
+    
+    if not found_card:
+        await interaction.response.send_message(
+            f"Nie posiadasz karty kierowcy o nazwie **{nazwa}**.",
+            ephemeral=True
+        )
+        return
+    
+    # Przeładuj dane kierowców
+    global all_drivers_data, last_drivers_load_time
+    if os.path.exists(DRIVERS_FILE):
+        current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
+        if current_drivers_mtime > last_drivers_load_time:
+            all_drivers_data = load_drivers_data()
+            last_drivers_load_time = current_drivers_mtime
+    
+    # Znajdź dane kierowcy
+    driver_data = None
+    for driver in all_drivers_data:
+        if driver['kierowca'].lower() == found_card.lower():
+            driver_data = driver
+            break
+    
+    if not driver_data:
+        await interaction.response.send_message(
+            f"Wystąpił błąd: nie znaleziono danych dla kierowcy **{found_card}**.",
+            ephemeral=True
+        )
+        return
+    
+    # Usuń kartę z konta użytkownika
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
+    
+    if user_id_str not in bot_data:
+        await interaction.response.send_message(
+            "Wystąpił błąd z danymi konta. Spróbuj ponownie.",
+            ephemeral=True
+        )
+        return
+    
+    bot_data[user_id_str]["karty"].remove(found_card)
+    save_data(bot_data)
+    
+    # Dodaj kartę do rynku
+    market_data = load_market()
+    
+    market_entry = {
+        "karta": found_card,
+        "ocena_ogolna": driver_data.get('ocena_ogolna', 0),
+        "cena": cena,
+        "sprzedajacy_id": user_id,
+        "sprzedajacy_name": interaction.user.display_name,
+        "data_wystawienia": datetime.now(timezone.utc).isoformat()
+    }
+    
+    market_data.append(market_entry)
+    save_market(market_data)
+    
+    await interaction.response.send_message(
+        f"Pomyślnie wystawiono kartę **{found_card}** ({driver_data.get('ocena_ogolna', 'Brak oceny')} OVR) na rynek za **{cena}** OPRF Coinsów!",
+        ephemeral=True
+    )
+    
+    print(f"Użytkownik {interaction.user.name} (ID: {user_id}) wystawił kartę {found_card} za {cena} OPRF Coinsów na rynek.")
+
+@tree.command(name="rynek-kup", description="Kup kartę z rynku")
+@app_commands.describe(
+    nazwa="Nazwa kierowcy, którego kartę chcesz kupić",
+    sprzedawca="Nazwa sprzedawcy (wymagane gdy jest kilka ofert tej samej karty)"
+)
+@app_commands.guild_only()
+async def rynek_kup_command(interaction: discord.Interaction, nazwa: str, sprzedawca: str = None):
+    """
+    Kupuje kartę z rynku.
+    """
+    user_id = interaction.user.id
+    user_id_str = str(user_id)
+    
+    # Załaduj dane rynku
+    market_data = load_market()
+    
+    if not market_data:
+        await interaction.response.send_message(
+            "Rynek jest obecnie pusty. Brak kart do kupienia.",
+            ephemeral=True
+        )
+        return
+    
+    # Znajdź kartę na rynku
+    nazwa_lower = nazwa.lower()
+    matching_cards = []
+    
+    for i, entry in enumerate(market_data):
+        if entry["karta"].lower() == nazwa_lower:
+            matching_cards.append((i, entry))
+    
+    if not matching_cards:
+        await interaction.response.send_message(
+            f"Nie znaleziono karty **{nazwa}** na rynku.",
+            ephemeral=True
+        )
+        return
+    
+    # Jeśli jest więcej niż jedna karta i nie podano sprzedawcy
+    if len(matching_cards) > 1 and sprzedawca is None:
+        sellers_list = []
+        for _, entry in matching_cards:
+            seller_name = entry.get("sprzedajacy_name", "Nieznany")
+            cena = entry["cena"]
+            sellers_list.append(f"• **{seller_name}** - {cena} OPRF Coinsów")
+        
+        sellers_text = "\n".join(sellers_list)
+        await interaction.response.send_message(
+            f"Znaleziono **{len(matching_cards)}** ofert karty **{nazwa}**. Wybierz sprzedawcę:\n\n{sellers_text}\n\n"
+            f"Użyj komendy: `/rynek-kup nazwa:{nazwa} sprzedawca:nazwa_sprzedawcy`",
+            ephemeral=True
+        )
+        return
+    
+    # Wybierz właściwą kartę
+    found_market_entry = None
+    market_index = -1
+    
+    if len(matching_cards) == 1:
+        # Tylko jedna karta - wybierz ją
+        market_index, found_market_entry = matching_cards[0]
+    else:
+        # Kilka kart - znajdź po sprzedawcy
+        sprzedawca_lower = sprzedawca.lower()
+        for i, entry in matching_cards:
+            if entry.get("sprzedajacy_name", "").lower() == sprzedawca_lower:
+                found_market_entry = entry
+                market_index = i
+                break
+        
+        if not found_market_entry:
+            available_sellers = [entry.get("sprzedajacy_name", "Nieznany") for _, entry in matching_cards]
+            await interaction.response.send_message(
+                f"Nie znaleziono sprzedawcy **{sprzedawca}** dla karty **{nazwa}**.\n"
+                f"Dostępni sprzedawcy: {', '.join(available_sellers)}",
+                ephemeral=True
+            )
+            return
+    
+    # Sprawdź czy użytkownik nie próbuje kupić własnej karty
+    if found_market_entry["sprzedajacy_id"] == user_id:
+        await interaction.response.send_message(
+            "Nie możesz kupić własnej karty z rynku!",
+            ephemeral=True
+        )
+        return
+    
+    # Sprawdź czy użytkownik ma wystarczająco monet
+    user_coins = get_user_coins(user_id)
+    required_coins = found_market_entry["cena"]
+    
+    if user_coins < required_coins:
+        await interaction.response.send_message(
+            f"Masz tylko **{user_coins}** OPRF Coinsów. Potrzebujesz **{required_coins}** OPRF Coinsów, aby kupić tę kartę.",
+            ephemeral=True
+        )
+        return
+    
+    # Przeładuj dane użytkowników
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
+    
+    # Inicjalizuj dane kupującego jeśli potrzeba
+    if user_id_str not in bot_data:
+        bot_data[user_id_str] = {
+            "user_name": interaction.user.name,
+            "oprf_coins": 0,
+            "paczki": 0,
+            "karty": []
+        }
+    
+    # Inicjalizuj dane sprzedającego jeśli potrzeba
+    seller_id_str = str(found_market_entry["sprzedajacy_id"])
+    if seller_id_str not in bot_data:
+        bot_data[seller_id_str] = {
+            "user_name": found_market_entry["sprzedajacy_name"],
+            "oprf_coins": 0,
+            "paczki": 0,
+            "karty": []
+        }
+    
+    # Przeprowadź transakcję
+    bot_data[user_id_str]["oprf_coins"] -= required_coins
+    bot_data[user_id_str]["karty"].append(found_market_entry["karta"])
+    bot_data[seller_id_str]["oprf_coins"] += required_coins
+    
+    save_data(bot_data)
+    
+    # Przeładuj dane rynku przed usunięciem (na wypadek zmian w międzyczasie)
+    market_data = load_market()
+    
+    # Znajdź i usuń konkretne ogłoszenie z rynku na podstawie unikalnych cech
+    for i in range(len(market_data) - 1, -1, -1):  # Iteruj od tyłu, żeby indeksy się nie przesuwały
+        entry = market_data[i]
+        if (entry["karta"] == found_market_entry["karta"] and
+            entry["sprzedajacy_id"] == found_market_entry["sprzedajacy_id"] and
+            entry["cena"] == found_market_entry["cena"] and
+            entry["data_wystawienia"] == found_market_entry["data_wystawienia"]):
+            market_data.pop(i)
+            break
+    
+    save_market(market_data)
+    
+    await interaction.response.send_message(
+        f"Pomyślnie kupiono kartę **{found_market_entry['karta']}** ({found_market_entry['ocena_ogolna']} OVR) za **{required_coins}** OPRF Coinsów!\n"
+        f"Twój stan konta: **{bot_data[user_id_str]['oprf_coins']}** OPRF Coinsów",
+        ephemeral=True
+    )
+    
+    print(f"Użytkownik {interaction.user.name} (ID: {user_id}) kupił kartę {found_market_entry['karta']} za {required_coins} OPRF Coinsów od użytkownika ID: {found_market_entry['sprzedajacy_id']}.")
+
+@tree.command(name="rynek", description="Wyświetl aktualny rynek kart")
+@app_commands.guild_only()
+async def rynek_command(interaction: discord.Interaction):
+    """
+    Wyświetla aktualny rynek kart w formie embeda.
+    """
+    # Załaduj dane rynku
+    market_data = load_market()
+    
+    embed = discord.Embed(
+        title="Rynek Kart",
+        description="",
+        color=hex_color("#FFFFFF")
+    )
+    
+    # Ustaw thumbnail na ikonę serwera
+    if interaction.guild and interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    
+    if not market_data:
+        embed.description = "Rynek jest obecnie pusty. Brak kart na sprzedaż."
+    else:
+        # Sortuj karty według oceny ogólnej (najlepsze na górze)
+        sorted_market = sorted(market_data, key=lambda x: x.get('ocena_ogolna', 0), reverse=True)
+        
+        for entry in sorted_market:
+            karta_nazwa = entry["karta"]
+            ocena = entry.get("ocena_ogolna", "Brak")
+            cena = entry["cena"]
+            sprzedajacy_id = entry["sprzedajacy_id"]
+            sprzedajacy_name = entry.get("sprzedajacy_name", "Nieznany")
+            
+            # Spróbuj znaleźć użytkownika na serwerze dla mentiona
+            try:
+                member = interaction.guild.get_member(sprzedajacy_id)
+                sprzedajacy_mention = member.mention if member else sprzedajacy_name
+            except (AttributeError, KeyError):
+                sprzedajacy_mention = sprzedajacy_name
+            
+            field_name = f"{karta_nazwa} ({ocena})"
+            field_value = f"{sprzedajacy_mention} - `{cena}` OPRF Coinsów"
+            
+            embed.add_field(
+                name=field_name,
+                value=field_value,
+                inline=False
+            )
+    
+    embed.set_footer(text="Official Polish Racing Fortnite")
+    
+    await interaction.response.send_message(embed=embed, ephemeral=False)
     
 @tree.command(name="pomoc", description="Wyświetla kartę pomocy bota")
 async def pomoc_command(interaction: discord.Interaction):
@@ -762,10 +1224,6 @@ async def pomoc_command(interaction: discord.Interaction):
         title="Pomoc",
         description=(
             "Oto karta pomocy bota!\n"
-            "Ostatnimi dniami hosting bota miał problemy i musieliśmy go zmienić.\n"
-            "W dalszym ciągu odbudowujemy komendy i wszystkie funkcje jakie miała stara wersja bota.\n"
-            "Niektóre funkcje mogą działać trochę inaczej.\n"
-            "Za wszelkie problemy przepraszamy!\n\n"
             "**Komendy**\n"
             "`Prefix - ;`\n"
             "ping - pokazuje opóźnienie bota i sprawdza jego aktywność\n"
@@ -784,6 +1242,11 @@ async def pomoc_command(interaction: discord.Interaction):
             "lista-paczka - wyświetla co może znajdować się w paczce\n"
             "ranking - wyświetla top 10 najbogatszych kont biorąc pod uwagę ilość paczek, coinsów i karty\n"
             "karta - wyświetla posiadaną kartę\n"
+            "zrealizuj-kod - umożliwia wykorzystanie kodu do odebrania nagrody\n"
+            "link - udostępnia link który może przekierować cię do strony z kodem\n"
+            "rynek - wyświetla rynek i wystawione na nim karty\n"
+            "rynek-sprzedaj - umożliwia sprzedanie karty na rynku\n"
+            "rynek-kup - umożliwia kupno karty z rynku\n"
         ),
         color=hex_color("#FFFFFF")
     )
