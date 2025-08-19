@@ -25,6 +25,7 @@ tree = bot.tree
 # --- Nazwy plików bazy danych ---
 DB_FILE = 'data.json'
 DRIVERS_FILE = 'drivers.json'
+LEGENDS_FILE = 'legends.json'  # Nowy plik z legendami
 
 CODES_FILE = 'codes.json'
 MARKET_FILE = 'rynek.json'
@@ -75,6 +76,9 @@ last_data_reload_time = 0.0 # Czas ostatniej modyfikacji DB_FILE
 all_drivers_data = [] # WAŻNE: Zostanie załadowana w on_ready
 last_drivers_load_time = 0.0 # NOWA ZMIENNA: Czas ostatniej modyfikacji DRIVERS_FILE
 
+all_legends_data = []  # Nowe: dane legend
+last_legends_load_time = 0.0  # Nowe: czas ostatniej modyfikacji LEGENDS_FILE
+
 # --- Funkcje ładowania/zapisywania danych ---
 def load_data():
     """Ładuje dane użytkowników z pliku JSON."""
@@ -103,6 +107,17 @@ def load_drivers_data():
             return []
     return [] # Zwróć pustą listę, jeśli plik nie istnieje
 
+def load_legends_data():
+    """Ładuje dane o legendach z pliku JSON."""
+    if os.path.exists(LEGENDS_FILE):
+        try:
+            with open(LEGENDS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Ostrzeżenie: Plik {LEGENDS_FILE} jest uszkodzony lub pusty. Zwracam pustą listę.")
+            return []
+    return []
+
 # --- Funkcje pomocnicze do pobierania danych użytkownika ---
 def get_user_coins(user_id):
     """Pobiera liczbę oprf_coins użytkownika."""
@@ -117,7 +132,7 @@ def get_user_coins(user_id):
     return bot_data.get(user_id_str, {}).get("oprf_coins", 0)
 
 def get_user_paczki(user_id):
-    """Pobiera liczbę paczek użytkownika."""
+    """Pobiera liczbę paczek kierowców użytkownika."""
     user_id_str = str(user_id)
     # Zawsze przeładowuj dane, aby być pewnym aktualności
     global bot_data, last_data_reload_time
@@ -127,6 +142,18 @@ def get_user_paczki(user_id):
             bot_data = load_data()
             last_data_reload_time = current_file_mtime
     return bot_data.get(user_id_str, {}).get("paczki", 0)
+
+def get_user_paczki_legend(user_id):
+    """Pobiera liczbę paczek legend użytkownika."""
+    user_id_str = str(user_id)
+    # Zawsze przeładowuj dane, aby być pewnym aktualności
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
+    return bot_data.get(user_id_str, {}).get("paczki_legend", 0)
 
 def get_user_cards(user_id):
     """Pobiera listę kart kierowców użytkownika."""
@@ -143,7 +170,7 @@ def get_user_cards(user_id):
 # --- Eventy bota ---
 @bot.event
 async def on_ready():
-    global bot_data, last_data_reload_time, all_drivers_data, last_drivers_load_time
+    global bot_data, last_data_reload_time, all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time
 
     # KROK 1: Wczytaj dane użytkowników (data.json)
     if os.path.exists(DB_FILE):
@@ -176,7 +203,22 @@ async def on_ready():
         all_drivers_data = []
         last_drivers_load_time = 0.0
 
-    # KROK 3: Synchronizacja komend i ustawienie statusu bota
+    # KROK 3: Wczytaj dane legend (legends.json)
+    if os.path.exists(LEGENDS_FILE):
+        try:
+            all_legends_data = load_legends_data()
+            last_legends_load_time = os.path.getmtime(LEGENDS_FILE)
+            print(f"Pomyślnie załadowano {len(all_legends_data)} legend z {LEGENDS_FILE}.")
+        except Exception as e:
+            print(f"Błąd podczas ładowania {LEGENDS_FILE} w on_ready: {e}. Lista legend będzie pusta.")
+            all_legends_data = []
+            last_legends_load_time = 0.0
+    else:
+        print(f"OSTRZEŻENIE: Plik {LEGENDS_FILE} nie istnieje! Funkcje związane z kartami legend mogą nie działać.")
+        all_legends_data = []
+        last_legends_load_time = 0.0
+
+    # KROK 4: Synchronizacja komend i ustawienie statusu bota
     await tree.sync()
     print(f'{bot.user} jest online!')
     activity = discord.Activity(type=discord.ActivityType.listening, name="/pomoc")
@@ -325,7 +367,6 @@ async def pitstop_game(interaction: discord.Interaction):
     response_content = f"`Link`: https://kwiatek909.github.io/oprf-website/ \n{user_mention} życzymy Ci miłej zabawy!"
     await interaction.response.send_message(response_content, ephemeral=True)
     
-# --- Zmodyfikowana komenda /sklep (używa nowej logiki ładowania) ---
 @tree.command(name="sklep", description="Odwiedź sklep OPRF!")
 @app_commands.guild_only()
 async def sklep_command(interaction: discord.Interaction):
@@ -338,38 +379,45 @@ async def sklep_command(interaction: discord.Interaction):
         custom_id="zakuppaczka"
     )
 
+    buy_legend_pack_button = discord.ui.Button(
+        label="Kup paczkę Legend OPRF",
+        style=discord.ButtonStyle.primary,
+        emoji="✨",
+        custom_id="zakuppaczkalegend"
+    )
+
     view = discord.ui.View(timeout=180)
     view.add_item(buy_pack_button)
+    view.add_item(buy_legend_pack_button)
 
     async def buy_pack_button_callback(interaction: discord.Interaction):
         user_id = interaction.user.id
         user_display_name = interaction.user.display_name
 
-        # DANE UŻYTKOWNIKA SĄ JUŻ ZAKTUALIZOWANE W get_user_coins
         item_cost = 25
-        current_coins = get_user_coins(user_id) # Ta funkcja już przeładowuje dane!
+        current_coins = get_user_coins(user_id)
 
         if current_coins >= item_cost:
             user_id_str = str(user_id)
-            if user_id_str not in bot_data: # Inicjalizacja dla nowych użytkowników
+            if user_id_str not in bot_data:
                 bot_data[user_id_str] = {
                     "user_name": interaction.user.name,
                     "oprf_coins": 0,
                     "paczki": 0,
+                    "paczki_legend": 0,
                     "karty": []
                 }
             
-            # Pobieramy paczki po przeładowaniu danych
             current_paczki = get_user_paczki(user_id) 
             
             bot_data[user_id_str]["oprf_coins"] -= item_cost
             bot_data[user_id_str]["paczki"] += 1
             
-            save_data(bot_data) # Zapisujemy zmiany
+            save_data(bot_data)
 
             await interaction.response.send_message(
                 f"**Gratulacje, {user_display_name}!** Pomyślnie zakupiono paczkę Kierowcy OPRF. "
-                f"Masz teraz `{bot_data[user_id_str]['oprf_coins']}` OPRF Coinsów i `{bot_data[user_id_str]['paczki']}` paczek.",
+                f"Masz teraz `{bot_data[user_id_str]['oprf_coins']}` OPRF Coinsów i `{bot_data[user_id_str]['paczki']}` paczek kierowców.",
                 ephemeral=True
             )
         else:
@@ -378,13 +426,51 @@ async def sklep_command(interaction: discord.Interaction):
                 ephemeral=True
             )
 
+    async def buy_legend_pack_button_callback(interaction: discord.Interaction):
+        user_id = interaction.user.id
+        user_display_name = interaction.user.display_name
+
+        item_cost = 10000
+        current_coins = get_user_coins(user_id)
+
+        if current_coins >= item_cost:
+            user_id_str = str(user_id)
+            if user_id_str not in bot_data:
+                bot_data[user_id_str] = {
+                    "user_name": interaction.user.name,
+                    "oprf_coins": 0,
+                    "paczki": 0,
+                    "paczki_legend": 0,
+                    "karty": []
+                }
+            
+            current_paczki_legend = get_user_paczki_legend(user_id) 
+            
+            bot_data[user_id_str]["oprf_coins"] -= item_cost
+            bot_data[user_id_str]["paczki_legend"] += 1
+            
+            save_data(bot_data)
+
+            await interaction.response.send_message(
+                f"**Gratulacje, {user_display_name}!** Pomyślnie zakupiono paczkę Legend OPRF. "
+                f"Masz teraz `{bot_data[user_id_str]['oprf_coins']}` OPRF Coinsów i `{bot_data[user_id_str]['paczki_legend']}` paczek legend.",
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"**{user_display_name}**, masz tylko `{current_coins}` OPRF Coinsów. Potrzebujesz `{item_cost}` OPRF Coinsów, aby kupić paczkę legend.",
+                ephemeral=True
+            )
+
     buy_pack_button.callback = buy_pack_button_callback
+    buy_legend_pack_button.callback = buy_legend_pack_button_callback
 
     embed = discord.Embed(
         title="Sklep OPRF 🛒",
         description="Witaj w sklepie discord Official Polish Racing Fortnite!\n"
                     "**Przedmioty**\n"
-                    "- Paczka Kierowcy OPRF `25 OPRF Coins`",
+                    "- Paczka Kierowcy OPRF `25 OPRF Coins`\n"
+                    "- Paczka Legend OPRF `N/A OPRF Coins`",
         color=hex_color("#FFFFFF")
     )
     if thumbnail_url:
@@ -394,52 +480,68 @@ async def sklep_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed, view=view)
 
 
-# --- Zmodyfikowana komenda /konto (z oceną ogólną przy kartach) ---
 @tree.command(name="konto", description="Wyświetla informacje o koncie!")
 @app_commands.describe(member="Opcjonalnie: Użytkownik, którego konto chcesz sprawdzić.")
 async def konto_command(interaction: discord.Interaction, member: discord.Member = None):
-    # DANE UŻYTKOWNIKA SĄ JUŻ ZAKTUALIZOWANE W get_user_coins itp.
     target_user = member if member else interaction.user
     user_id = target_user.id
 
-    # Inicjalizacja danych dla użytkownika, jeśli ich jeszcze nie ma lub brakuje pola 'karty'
+    # Inicjalizacja danych dla użytkownika, jeśli ich jeszcze nie ma
     user_id_str = str(user_id)
-    if user_id_str not in bot_data: # Używamy bot_data, które zostało zaktualizowane przez get_user_coins/paczki/cards
+    if user_id_str not in bot_data:
         bot_data[user_id_str] = {
             "user_name": target_user.name,
             "oprf_coins": 0,
             "paczki": 0,
+            "paczki_legend": 0,
             "karty": []
         }
-        save_data(bot_data) # Zapisujemy nowego użytkownika
+        save_data(bot_data)
     elif "karty" not in bot_data[user_id_str]:
         bot_data[user_id_str]["karty"] = []
         save_data(bot_data)
+    elif "paczki_legend" not in bot_data[user_id_str]:
+        bot_data[user_id_str]["paczki_legend"] = 0
+        save_data(bot_data)
 
-    coins = get_user_coins(user_id) # Te funkcje już dbają o przeładowanie
+    coins = get_user_coins(user_id)
     paczki = get_user_paczki(user_id)
+    paczki_legend = get_user_paczki_legend(user_id)
     karty = get_user_cards(user_id)
 
-    # Sprawdź i przeładuj dane kierowców (jeśli plik się zmienił)
-    global all_drivers_data, last_drivers_load_time
+    # Sprawdź i przeładuj dane kierowców i legend
+    global all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time
     if os.path.exists(DRIVERS_FILE):
         current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
         if current_drivers_mtime > last_drivers_load_time:
             all_drivers_data = load_drivers_data()
             last_drivers_load_time = current_drivers_mtime
 
+    if os.path.exists(LEGENDS_FILE):
+        current_legends_mtime = os.path.getmtime(LEGENDS_FILE)
+        if current_legends_mtime > last_legends_load_time:
+            all_legends_data = load_legends_data()
+            last_legends_load_time = current_legends_mtime
+
     # Tworzenie listy kart z oceną ogólną
     if karty:
         cards_with_rating = []
         for karta in karty:
-            # Znajdź kierowcę w danych all_drivers_data
+            # Znajdź kierowcę w danych kierowców
             driver_data = None
             for driver in all_drivers_data:
                 if driver['kierowca'] == karta:
                     driver_data = driver
                     break
             
-            # Jeśli znaleziono dane kierowcy, dodaj ocenę ogólną
+            # Jeśli nie znaleziono w kierowcach, sprawdź legendy
+            if not driver_data:
+                for legend in all_legends_data:
+                    if legend['kierowca'] == karta:
+                        driver_data = legend
+                        break
+            
+            # Jeśli znaleziono dane, dodaj ocenę ogólną
             if driver_data and driver_data.get('ocena_ogolna') is not None:
                 cards_with_rating.append(f"{karta} ({driver_data['ocena_ogolna']})")
             else:
@@ -454,7 +556,8 @@ async def konto_command(interaction: discord.Interaction, member: discord.Member
         f"**Stan Konta**\n"
         f"- Stan Konta: `{coins}` OPRF Coinsów\n"
         f"**Przedmioty**\n"
-        f"- Paczki: `{paczki}`\n"
+        f"- Paczki Kierowców: `{paczki}`\n"
+        f"- Paczki Legend: `{paczki_legend}`\n"
         f"- Karty: {cards_display}"
     )
 
@@ -471,89 +574,98 @@ async def konto_command(interaction: discord.Interaction, member: discord.Member
 
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
-# --- Zmodyfikowana komenda /paczka (używa nowej logiki ładowania) ---
 @tree.command(name="paczka", description="Wyświetla paczkę do otwarcia.")
+@app_commands.describe(typ="Typ paczki do otwarcia")
+@app_commands.choices(typ=[
+    app_commands.Choice(name="Kierowcy", value="kierowcy"),
+    app_commands.Choice(name="Legend", value="legend")
+])
 @app_commands.guild_only()
-async def paczka_command(interaction: discord.Interaction):
+async def paczka_command(interaction: discord.Interaction, typ: str):
     user_id = interaction.user.id
-    current_paczki = get_user_paczki(user_id) # Ta funkcja już przeładowuje dane!
+    
+    if typ == "kierowcy":
+        current_paczki = get_user_paczki(user_id)
+        pack_type_display = "Kierowcy"
+        pack_image = "https://cdn.discordapp.com/attachments/1268199863636594788/1399530452141998100/golden_pack_2.png?ex=688955cd&is=6888044d&hm=eb807ba604a5fd8979b66077744205abe240b32674b8038bb3a9eba984723f05&"
+    else:  # legend
+        current_paczki = get_user_paczki_legend(user_id)
+        pack_type_display = "Legend"
+        pack_image = "https://cdn.discordapp.com/attachments/1268199863636594788/1404607231399559168/obraz_2025-08-12_012723233_preview_rev_1.png?ex=689bcdec&is=689a7c6c&hm=d94c30ff828f19e056bcd1e348564645cfe3c60a3e6f0a2f33018cb60b38893c&" # Możesz zmienić na inny obraz dla legend
 
     if current_paczki < 1:
         await interaction.response.send_message(
-            "Nie masz żadnych paczek do otwarcia! Kup je w `/sklep`.",
+            f"Nie masz żadnych paczek {pack_type_display} do otwarcia! Kup je w `/sklep`.",
             ephemeral=True
         )
         return
 
     open_pack_button = discord.ui.Button(
-        label="Otwórz Paczkę",
+        label=f"Otwórz Paczkę {pack_type_display}",
         style=discord.ButtonStyle.success,
-        emoji="📦",
-        custom_id="paczkaopen"
+        emoji="📦" if typ == "kierowcy" else "✨",
+        custom_id=f"paczkaopen_{typ}"
     )
 
     view = discord.ui.View(timeout=180)
     view.add_item(open_pack_button)
 
     async def open_pack_button_callback(interaction: discord.Interaction):
-        user_id = interaction.user.id
+        # Sprawdź, czy to ten sam użytkownik, który wywołał komendę
+        if interaction.user.id != user_id:
+            await interaction.response.send_message("Nie możesz użyć tego przycisku, ponieważ nie jest Twój!", ephemeral=True)
+            return
+            
+        user_id_str = str(user_id)
         user_display_name = interaction.user.display_name
 
-        # DANE UŻYTKOWNIKA SĄ JUŻ ZAKTUALIZOWANE PRZEZ get_user_paczki
-        current_paczki_after_check = get_user_paczki(user_id) # Ponowne sprawdzenie po kliknięciu
+        # Sprawdź ponownie, czy użytkownik ma paczki, żeby uniknąć dwukrotnego otwarcia
+        if typ == "kierowcy":
+            current_paczki_after_check = get_user_paczki(user_id)
+        else:
+            current_paczki_after_check = get_user_paczki_legend(user_id)
 
         if current_paczki_after_check < 1:
             await interaction.response.send_message(
-                "Wygląda na to, że nie masz już paczek! Być może właśnie ją otworzyłeś.",
+                f"Wygląda na to, że nie masz już paczek {pack_type_display}! Być może właśnie ją otworzyłeś.",
                 ephemeral=True
             )
+            # Dezaktywuj przycisk, żeby nie dało się go użyć ponownie
+            view.clear_items()
+            await interaction.message.edit(view=view)
             return
 
-        user_id_str = str(user_id)
-        # Te sprawdzenia są redundantne, jeśli get_user_paczki/cards zawsze inicjalizuje,
-        # ale nie zaszkodzą, jeśli coś by się zmieniało w przyszłości.
-        if user_id_str not in bot_data:
-            bot_data[user_id_str] = {
-                "user_name": interaction.user.name,
-                "oprf_coins": 0,
-                "paczki": 0,
-                "karty": []
-            }
-        elif "karty" not in bot_data[user_id_str]:
-            bot_data[user_id_str]["karty"] = []
-
-        bot_data[user_id_str]["paczki"] -= 1
-
-        # KROK: Sprawdź i przeładuj dane kierowców (jeśli plik się zmienił)
-        global all_drivers_data, last_drivers_load_time # Dodaj last_drivers_load_time tutaj
-        if os.path.exists(DRIVERS_FILE):
-            current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
-            if current_drivers_mtime > last_drivers_load_time: # Użyj last_drivers_load_time
-                print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców przed losowaniem...")
-                all_drivers_data = load_drivers_data()
-                last_drivers_load_time = current_drivers_mtime
+        # Zmniejsz liczbę paczek odpowiedniego typu
+        if typ == "kierowcy":
+            bot_data[user_id_str]["paczki"] -= 1
         else:
-            print(f"Plik {DRIVERS_FILE} nie istnieje. Nie ma kierowców do wylosowania.")
+            bot_data[user_id_str]["paczki_legend"] -= 1
+
+        # Wybierz odpowiednie dane do losowania
+        if typ == "kierowcy":
+            # Przeładuj dane kierowców (ta logika jest już w Twoim kodzie)
+            # ...
+            available_data = all_drivers_data
+            file_name = DRIVERS_FILE
+        else:
+            # Przeładuj dane legend (ta logika jest już w Twoim kodzie)
+            # ...
+            available_data = all_legends_data
+            file_name = LEGENDS_FILE
+
+        if not available_data:
             await interaction.response.send_message(
-                "Wystąpił błąd: brak danych o kierowcach. Skontaktuj się z administratorem.",
+                f"Brak dostępnych kart {pack_type_display.lower()} do wylosowania. Skontaktuj się z administratorem.",
                 ephemeral=True
             )
             return
 
-        if not all_drivers_data:
-            await interaction.response.send_message(
-                "Brak dostępnych kart kierowców do wylosowania. Skontaktuj się z administratorem.",
-                ephemeral=True
-            )
-            return
-
-        chosen_driver = random.choice(all_drivers_data)
+        chosen_driver = random.choice(available_data)
         bot_data[user_id_str]["karty"].append(chosen_driver['kierowca'])
-
         save_data(bot_data)
 
         reward_embed = discord.Embed(
-            title=f"Karta Kierowcy - {chosen_driver['kierowca']}",
+            title=f"Karta {pack_type_display} - {chosen_driver['kierowca']}",
             description=(
                 f"**Informacje Kierowcy:**\n"
                 f"`Numer` - #{chosen_driver['numer']}\n"
@@ -573,67 +685,100 @@ async def paczka_command(interaction: discord.Interaction):
             icon_url=interaction.user.avatar.url if interaction.user.avatar else None
         )
         reward_embed.set_footer(text="Official Polish Racing Fortnite")
-
+        
+        # WAŻNA ZMIANA:
+        # Zastąp oryginalną wiadomość nową, by uniknąć chaosu
         await interaction.response.send_message(
-            content=f"**{user_display_name}** otworzył paczkę i wylosował:",
-            embed=reward_embed,
-            ephemeral=False
+            content=f"**{user_display_name}** otworzył paczkę {pack_type_display} i wylosował:",
+            embed=reward_embed
         )
 
     open_pack_button.callback = open_pack_button_callback
-
-    initial_embed = discord.Embed(
-        title="Paczka 📦",
-        description="Twoja paczka stoi przed tobą \ni czeka aż ją otworzysz!",
+    
+    # Przycisk, który wyświetla paczkę do otwarcia
+    pack_embed = discord.Embed(
+        title=f"Otwórz paczkę {pack_type_display}",
+        description=f"Masz **{current_paczki}** paczek {pack_type_display} do otwarcia.\n Kliknij przycisk poniżej, aby to zrobić.",
         color=hex_color("#FFFFFF")
     )
-    initial_embed.set_image(url="https://cdn.discordapp.com/attachments/1268199863636594788/1399530452141998100/golden_pack_2.png?ex=688955cd&is=6888044d&hm=eb807ba604a5fd8979b66077744205abe240b32674b8038bb3a9eba984723f05&")
-    initial_embed.set_footer(text="Official Polish Racing Fortnite")
+    pack_embed.set_image(url=pack_image)
+    pack_embed.set_footer(text="Official Polish Racing Fortnite")
+    
+    await interaction.response.send_message(
+        embed=pack_embed,
+        view=view,
+        ephemeral=False # To sprawi, że wiadomość z przyciskiem będzie publiczna
+    )
 
-    await interaction.response.send_message(embed=initial_embed, view=view, ephemeral=False)
-
+# --- Zmodyfikowana komenda /lista-paczka (z wyborem typu paczki) ---
 @tree.command(name="lista-paczka", description="Wyświetla listę dostępnych kart w paczce, posortowanych od najlepszych.")
+@app_commands.describe(typ="Typ paczki do sprawdzenia")
+@app_commands.choices(typ=[
+    app_commands.Choice(name="Kierowcy", value="kierowcy"),
+    app_commands.Choice(name="Legend", value="legend")
+])
 @app_commands.guild_only()
-async def lista_paczka_command(interaction: discord.Interaction):
+async def lista_paczka_command(interaction: discord.Interaction, typ: str):
     """
-    Wyświetla ranking kierowców dostępnych w paczkach, posortowanych po ocenie ogólnej.
+    Wyświetla ranking kierowców/legend dostępnych w paczkach, posortowanych po ocenie ogólnej.
     """
-    global all_drivers_data, last_drivers_load_time
+    global all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time
 
-    # Przeładowanie danych kierowców, jeśli plik uległ zmianie
-    if os.path.exists(DRIVERS_FILE):
-        current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
-        if current_drivers_mtime > last_drivers_load_time:
-            print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców...")
-            all_drivers_data = load_drivers_data()
-            last_drivers_load_time = current_drivers_mtime
-    else:
+    if typ == "kierowcy":
+        # Przeładowanie danych kierowców, jeśli plik uległ zmianie
+        if os.path.exists(DRIVERS_FILE):
+            current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
+            if current_drivers_mtime > last_drivers_load_time:
+                print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców...")
+                all_drivers_data = load_drivers_data()
+                last_drivers_load_time = current_drivers_mtime
+        else:
+            await interaction.response.send_message(
+                "Wystąpił błąd: brak danych o kierowcach. Skontaktuj się z administratorem.",
+                ephemeral=True
+            )
+            return
+
+        available_data = all_drivers_data
+        title_text = "Lista zawartości paczki Kierowców"
+    else:  # legend
+        # Przeładowanie danych legend, jeśli plik uległ zmianie
+        if os.path.exists(LEGENDS_FILE):
+            current_legends_mtime = os.path.getmtime(LEGENDS_FILE)
+            if current_legends_mtime > last_legends_load_time:
+                print(f"Wykryto zmiany w {LEGENDS_FILE}. Przeładowuję dane legend...")
+                all_legends_data = load_legends_data()
+                last_legends_load_time = current_legends_mtime
+        else:
+            await interaction.response.send_message(
+                "Wystąpił błąd: brak danych o legendach. Skontaktuj się z administratorem.",
+                ephemeral=True
+            )
+            return
+
+        available_data = all_legends_data
+        title_text = "Lista zawartości paczki Legend"
+
+    if not available_data:
         await interaction.response.send_message(
-            "Wystąpił błąd: brak danych o kierowcach. Skontaktuj się z administratorem.",
+            f"Brak dostępnych kart do wyświetlenia. Skontaktuj się z administratorem.",
             ephemeral=True
         )
         return
 
-    if not all_drivers_data:
-        await interaction.response.send_message(
-            "Brak dostępnych kart kierowców do wyświetlenia. Skontaktuj się z administratorem.",
-            ephemeral=True
-        )
-        return
-
-    # Sortowanie kierowców malejąco po ocenie ogólnej
-    sorted_drivers = sorted(all_drivers_data, key=lambda d: d.get('ocena_ogolna', 0), reverse=True)
+    # Sortowanie kierowców/legend malejąco po ocenie ogólnej
+    sorted_data = sorted(available_data, key=lambda d: d.get('ocena_ogolna', 0), reverse=True)
 
     # Tworzenie listy do opisu embeda
-    drivers_list = []
-    for driver in sorted_drivers:
-        ocena = driver.get('ocena_ogolna', 'Brak')
-        drivers_list.append(f"{driver['kierowca']} - `{ocena}` OVR")
+    items_list = []
+    for item in sorted_data:
+        ocena = item.get('ocena_ogolna', 'Brak')
+        items_list.append(f"{item['kierowca']} - `{ocena}` OVR")
     
-    description_text = "\n".join(drivers_list)
+    description_text = "\n".join(items_list)
 
     embed = discord.Embed(
-        title="Lista zawartości paczki",
+        title=title_text,
         description=description_text,
         color=hex_color("#FFFFFF")
     )
@@ -642,13 +787,14 @@ async def lista_paczka_command(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=False)
 
+# --- Zmodyfikowana komenda /ranking (z uwzględnieniem paczek legend) ---
 @tree.command(name="ranking", description="Wyświetla top 10 najbardziej wartościowych kont graczy.")
 @app_commands.guild_only()
 async def ranking_command(interaction: discord.Interaction):
     """
     Wyświetla ranking graczy na podstawie wartości ich kont (paczki, coinsy i karty).
     """
-    global bot_data, last_data_reload_time, all_drivers_data, last_drivers_load_time
+    global bot_data, last_data_reload_time, all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time
 
     # Upewnij się, że dane użytkowników są aktualne
     if os.path.exists(DB_FILE):
@@ -664,18 +810,28 @@ async def ranking_command(interaction: discord.Interaction):
             all_drivers_data = load_drivers_data()
             last_drivers_load_time = current_drivers_mtime
 
-    # Definicja wartości punktowej: 1 paczka = 25 coinsów, 1 karta = 25 coinsów
-    item_value = 25
+    # Upewnij się, że dane legend są aktualne
+    if os.path.exists(LEGENDS_FILE):
+        current_legends_mtime = os.path.getmtime(LEGENDS_FILE)
+        if current_legends_mtime > last_legends_load_time:
+            all_legends_data = load_legends_data()
+            last_legends_load_time = current_legends_mtime
+
+    # Definicja wartości punktowej
+    kierowcy_pack_value = 25
+    legend_pack_value = 50
+    card_value = 25
 
     # Obliczanie wartości konta dla każdego użytkownika
     account_values = []
     for user_id_str, user_data in bot_data.items():
         coins = user_data.get("oprf_coins", 0)
         paczki = user_data.get("paczki", 0)
+        paczki_legend = user_data.get("paczki_legend", 0)
         karty = user_data.get("karty", [])
         
-        # Całkowita wartość konta = coinsy + (paczki * wartość_paczki) + (liczba_kart * wartość_karty)
-        total_value = coins + (paczki * item_value) + (len(karty) * item_value)
+        # Całkowita wartość konta
+        total_value = coins + (paczki * kierowcy_pack_value) + (paczki_legend * legend_pack_value) + (len(karty) * card_value)
         
         # Przygotowanie listy kart do wyświetlenia w embedzie
         cards_display = ", ".join(karty) if karty else "Brak"
@@ -685,6 +841,7 @@ async def ranking_command(interaction: discord.Interaction):
             "user_name": user_data.get("user_name", "Nieznany Użytkownik"),
             "oprf_coins": coins,
             "paczki": paczki,
+            "paczki_legend": paczki_legend,
             "karty_display": cards_display,
             "total_value": total_value
         })
@@ -703,7 +860,7 @@ async def ranking_command(interaction: discord.Interaction):
             user_display = user["user_name"]
             
         description_lines.append(
-            f"**{i + 1}**. {user_display} - `{user['paczki']}` paczek, `{user['oprf_coins']}` OPRF Coinsów, Karty: {user['karty_display']}"
+            f"**{i + 1}**. {user_display} - `{user['paczki']}` paczek kierowców, `{user['paczki_legend']}` paczek legend, `{user['oprf_coins']}` OPRF Coinsów, Karty: {user['karty_display']}"
         )
     
     description_text = "\n".join(description_lines)
@@ -729,22 +886,28 @@ async def ranking_command(interaction: discord.Interaction):
 @app_commands.guild_only()
 async def karta_command(interaction: discord.Interaction, nazwa: str):
     """
-    Wyświetla szczegóły karty kierowcy, jeśli użytkownik ją posiada.
+    Wyświetla szczegóły karty kierowcy/legendy, jeśli użytkownik ją posiada.
     """
     user_id = interaction.user.id
     user_id_str = str(user_id)
-    user_cards = get_user_cards(user_id)  # Ta funkcja przeładowuje dane użytkownika
+    user_cards = get_user_cards(user_id)
 
     # Normalizuj wejście użytkownika, aby było case-insensitive
     nazwa_lower = nazwa.lower()
     
-    # Przeładuj dane kierowców, jeśli są nieaktualne
-    global all_drivers_data, last_drivers_load_time
+    # Przeładuj dane kierowców i legend, jeśli są nieaktualne
+    global all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time
     if os.path.exists(DRIVERS_FILE):
         current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
         if current_drivers_mtime > last_drivers_load_time:
             all_drivers_data = load_drivers_data()
             last_drivers_load_time = current_drivers_mtime
+
+    if os.path.exists(LEGENDS_FILE):
+        current_legends_mtime = os.path.getmtime(LEGENDS_FILE)
+        if current_legends_mtime > last_legends_load_time:
+            all_legends_data = load_legends_data()
+            last_legends_load_time = current_legends_mtime
 
     # Sprawdź, czy użytkownik posiada kartę
     if nazwa not in user_cards:
@@ -763,12 +926,22 @@ async def karta_command(interaction: discord.Interaction, nazwa: str):
             )
             return
 
-    # Znajdź dane kierowcy w globalnej liście
+    # Znajdź dane kierowcy w globalnej liście kierowców
     driver_data = None
+    card_type = "Kierowcy"
     for driver in all_drivers_data:
         if driver['kierowca'].lower() == nazwa_lower:
             driver_data = driver
+            card_type = "Kierowcy"
             break
+
+    # Jeśli nie znaleziono w kierowcach, sprawdź legendy
+    if not driver_data:
+        for legend in all_legends_data:
+            if legend['kierowca'].lower() == nazwa_lower:
+                driver_data = legend
+                card_type = "Legend"
+                break
 
     if not driver_data:
         await interaction.response.send_message(
@@ -779,7 +952,7 @@ async def karta_command(interaction: discord.Interaction, nazwa: str):
 
     # Utwórz embed z danymi kierowcy
     card_embed = discord.Embed(
-        title=f"Karta Kierowcy - {driver_data['kierowca']}",
+        title=f"Karta {card_type} - {driver_data['kierowca']}",
         description=(
             f"**Informacje Kierowcy:**\n"
             f"`Numer` - #{driver_data['numer']}\n"
@@ -949,20 +1122,32 @@ async def rynek_sprzedaj_command(interaction: discord.Interaction, nazwa: str, c
         )
         return
     
-    # Przeładuj dane kierowców
-    global all_drivers_data, last_drivers_load_time
+    # Przeładuj dane kierowców i legend
+    global all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time
     if os.path.exists(DRIVERS_FILE):
         current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
         if current_drivers_mtime > last_drivers_load_time:
             all_drivers_data = load_drivers_data()
             last_drivers_load_time = current_drivers_mtime
     
-    # Znajdź dane kierowcy
+    if os.path.exists(LEGENDS_FILE):
+        current_legends_mtime = os.path.getmtime(LEGENDS_FILE)
+        if current_legends_mtime > last_legends_load_time:
+            all_legends_data = load_legends_data()
+            last_legends_load_time = current_legends_mtime
+    
+    # Znajdź dane kierowcy (sprawdź najpierw kierowców, potem legendy)
     driver_data = None
     for driver in all_drivers_data:
         if driver['kierowca'].lower() == found_card.lower():
             driver_data = driver
             break
+    
+    if not driver_data:
+        for legend in all_legends_data:
+            if legend['kierowca'].lower() == found_card.lower():
+                driver_data = legend
+                break
     
     if not driver_data:
         await interaction.response.send_message(
@@ -1123,6 +1308,7 @@ async def rynek_kup_command(interaction: discord.Interaction, nazwa: str, sprzed
             "user_name": interaction.user.name,
             "oprf_coins": 0,
             "paczki": 0,
+            "paczki_legend": 0,
             "karty": []
         }
     
@@ -1133,6 +1319,7 @@ async def rynek_kup_command(interaction: discord.Interaction, nazwa: str, sprzed
             "user_name": found_market_entry["sprzedajacy_name"],
             "oprf_coins": 0,
             "paczki": 0,
+            "paczki_legend": 0,
             "karty": []
         }
     
@@ -1170,9 +1357,8 @@ async def rynek_kup_command(interaction: discord.Interaction, nazwa: str, sprzed
 @app_commands.guild_only()
 async def rynek_command(interaction: discord.Interaction):
     """
-    Wyświetla aktualny rynek kart w formie embeda.
+    Wyświetla aktualny rynek kart w formie embeda, z listą w opisie.
     """
-    # Załaduj dane rynku
     market_data = load_market()
     
     embed = discord.Embed(
@@ -1181,42 +1367,120 @@ async def rynek_command(interaction: discord.Interaction):
         color=hex_color("#FFFFFF")
     )
     
-    # Ustaw thumbnail na ikonę serwera
     if interaction.guild and interaction.guild.icon:
         embed.set_thumbnail(url=interaction.guild.icon.url)
-    
+
     if not market_data:
         embed.description = "Rynek jest obecnie pusty. Brak kart na sprzedaż."
     else:
-        # Sortuj karty według oceny ogólnej (najlepsze na górze)
-        sorted_market = sorted(market_data, key=lambda x: x.get('ocena_ogolna', 0), reverse=True)
-        
-        for entry in sorted_market:
-            karta_nazwa = entry["karta"]
-            ocena = entry.get("ocena_ogolna", "Brak")
-            cena = entry["cena"]
-            sprzedajacy_id = entry["sprzedajacy_id"]
-            sprzedajacy_name = entry.get("sprzedajacy_name", "Nieznany")
+        # Grupowanie kart według nazwy
+        grouped_cards = {}
+        for entry in market_data:
+            card_name = entry["karta"]
+            if card_name not in grouped_cards:
+                grouped_cards[card_name] = []
+            grouped_cards[card_name].append(entry)
+
+        # Sortowanie kart według oceny ogólnej (najwyższa ocena na górze)
+        sorted_card_names = sorted(
+            grouped_cards.keys(),
+            key=lambda k: int(grouped_cards[k][0].get('ocena_ogolna', 0)),
+            reverse=True
+        )
+
+        market_list = []
+        for card_name in sorted_card_names:
+            # Sortowanie ofert dla danej karty według ceny (od najniższej do najwyższej)
+            offers = sorted(grouped_cards[card_name], key=lambda x: int(x.get('cena', 999999)))
+
+            first_offer = offers[0]
+            ocena = first_offer.get("ocena_ogolna", "Brak")
+
+            # Tworzenie nagłówka dla każdej grupy kart
+            market_list.append(f"**{card_name}** ({ocena})")
+
+            # Dodawanie każdej oferty do listy
+            for offer in offers:
+                cena = offer["cena"]
+                sprzedajacy_id = offer["sprzedajacy_id"]
+                sprzedajacy_name = offer.get("sprzedajacy_name", "Nieznany")
+
+                try:
+                    member = interaction.guild.get_member(sprzedajacy_id)
+                    sprzedajacy_mention = f"<@{sprzedajacy_id}>" if member else sprzedajacy_name
+                except (AttributeError, KeyError):
+                    sprzedajacy_mention = sprzedajacy_name
+
+                market_list.append(f"  - `{cena}` Coinsów od: {sprzedajacy_mention}")
             
-            # Spróbuj znaleźć użytkownika na serwerze dla mentiona
-            try:
-                member = interaction.guild.get_member(sprzedajacy_id)
-                sprzedajacy_mention = member.mention if member else sprzedajacy_name
-            except (AttributeError, KeyError):
-                sprzedajacy_mention = sprzedajacy_name
-            
-            field_name = f"{karta_nazwa} ({ocena})"
-            field_value = f"{sprzedajacy_mention} - `{cena}` OPRF Coinsów"
-            
-            embed.add_field(
-                name=field_name,
-                value=field_value,
-                inline=False
-            )
-    
+            market_list.append("") # Dodanie pustej linii dla lepszej czytelności
+
+        embed.description = "\n".join(market_list).strip()
+
+        # Sprawdzanie limitu znaków, aby uniknąć błędów
+        if len(embed.description) > 4096:
+            embed.description = "Rynek jest zbyt duży, aby wyświetlić go w całości. Sprawdź mniejszą sekcję rynku."
+
     embed.set_footer(text="Official Polish Racing Fortnite")
     
     await interaction.response.send_message(embed=embed, ephemeral=False)
+
+@tree.command(name="szybka-sprzedaz", description="Szybka sprzedaż karty za OPRF Coinsy.")
+@app_commands.describe(karta="Nazwa karty, którą chcesz sprzedać.")
+@app_commands.guild_only()
+async def szybka_sprzedaz_command(interaction: discord.Interaction, karta: str):
+    """
+    Umożliwia użytkownikowi sprzedaż karty ze swojej kolekcji w zamian za losową liczbę coinsów.
+    """
+    user_id = interaction.user.id
+    user_id_str = str(user_id)
+    
+    # 1. Przeładuj dane, aby upewnić się, że są aktualne
+    global bot_data, last_data_reload_time
+    if os.path.exists(DB_FILE):
+        current_file_mtime = os.path.getmtime(DB_FILE)
+        if current_file_mtime > last_data_reload_time:
+            bot_data = load_data()
+            last_data_reload_time = current_file_mtime
+
+    # 2. Sprawdź, czy użytkownik ma kartę do sprzedaży
+    user_cards = bot_data.get(user_id_str, {}).get("karty", [])
+    
+    # Użyj pętli, aby znaleźć kartę bez względu na wielkość liter
+    found_card = None
+    for card_name in user_cards:
+        if card_name.lower() == karta.lower():
+            found_card = card_name
+            break
+            
+    if not found_card:
+        await interaction.response.send_message(
+            f"Nie posiadasz karty o nazwie `{karta}`.",
+            ephemeral=True
+        )
+        return
+
+    # 3. Usuń kartę i przyznaj losowe coinsy
+    bot_data[user_id_str]["karty"].remove(found_card)
+    
+    # Wylosuj liczbę coinsów od 3 do 8
+    reward_coins = random.randint(3, 8)
+    
+    # Dodaj coinsy do salda użytkownika
+    if "oprf_coins" not in bot_data[user_id_str]:
+        bot_data[user_id_str]["oprf_coins"] = 0
+        
+    bot_data[user_id_str]["oprf_coins"] += reward_coins
+    
+    # 4. Zapisz zaktualizowane dane
+    save_data(bot_data)
+    
+    # 5. Wyślij wiadomość potwierdzającą sprzedaż jako plain text
+    response_message = (
+        f"Pomyślnie sprzedałeś kartę **{found_card}** za `{reward_coins}` OPRF Coinsów.\n"
+    )
+    
+    await interaction.response.send_message(response_message, ephemeral=True)
     
 @tree.command(name="pomoc", description="Wyświetla kartę pomocy bota")
 async def pomoc_command(interaction: discord.Interaction):
@@ -1247,6 +1511,7 @@ async def pomoc_command(interaction: discord.Interaction):
             "rynek - wyświetla rynek i wystawione na nim karty\n"
             "rynek-sprzedaj - umożliwia sprzedanie karty na rynku\n"
             "rynek-kup - umożliwia kupno karty z rynku\n"
+            "szybka-sprzedaż - natychmiastowo sprzedaje twoją kartę"
         ),
         color=hex_color("#FFFFFF")
     )
