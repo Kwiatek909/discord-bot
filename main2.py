@@ -612,7 +612,7 @@ async def sklep_command(interaction: discord.Interaction):
         user_id = interaction.user.id
         user_display_name = interaction.user.display_name
 
-        item_cost = 10000  # Możesz zmienić cenę
+        item_cost = 50  # Możesz zmienić cenę
         current_coins = get_user_coins(user_id)
 
         if current_coins >= item_cost:
@@ -655,7 +655,7 @@ async def sklep_command(interaction: discord.Interaction):
                     "**Przedmioty**\n"
                     "- Paczka Kierowcy OPRF `25 OPRF Coinsów`\n"
                     "- Paczka Legend OPRF `100 OPRF Coinsów`\n"
-                    "- Paczka Mistrzów OPRF `N/A OPRF Coinsów`",
+                    "- Paczka Mistrzów OPRF `50 OPRF Coinsów`",
         color=hex_color("#FFFFFF")
     )
     if thumbnail_url:
@@ -1580,7 +1580,7 @@ async def szybka_sprzedaz_command(interaction: discord.Interaction, karta: str):
 @app_commands.choices(typ=[
     app_commands.Choice(name="Kierowcy", value="kierowcy"),
     app_commands.Choice(name="Legend", value="legend"),
-    app_commands.Choice(name="Mistrzów", value="mistrzow")
+    app_commands.Choice(name="Mistrzowie", value="mistrzowie")
 ])
 @app_commands.guild_only()
 async def lista_paczka_command(interaction: discord.Interaction, typ: str):
@@ -1589,66 +1589,56 @@ async def lista_paczka_command(interaction: discord.Interaction, typ: str):
     """
     global all_drivers_data, last_drivers_load_time, all_legends_data, last_legends_load_time, all_mistrzow_data, last_mistrzow_load_time
 
+    available_data = []
+    title_text = ""
+    file_path = ""
+    last_load_time = 0.0
+    
     if typ == "kierowcy":
-        # Przeładowanie danych kierowców, jeśli plik uległ zmianie
-        if os.path.exists(DRIVERS_FILE):
-            current_drivers_mtime = os.path.getmtime(DRIVERS_FILE)
-            if current_drivers_mtime > last_drivers_load_time:
-                print(f"Wykryto zmiany w {DRIVERS_FILE}. Przeładowuję dane kierowców...")
-                all_drivers_data = load_drivers_data()
-                last_drivers_load_time = current_drivers_mtime
-        else:
-            await interaction.response.send_message(
-                "Wystąpił błąd: brak danych o kierowcach. Skontaktuj się z administratorem.",
-                ephemeral=True
-            )
-            return
-
         available_data = all_drivers_data
         title_text = "Lista zawartości paczki Kierowców"
-    elif typ == "legend":  
-        # Przeładowanie danych legend, jeśli plik uległ zmianie
-        if os.path.exists(LEGENDS_FILE):
-            current_legends_mtime = os.path.getmtime(LEGENDS_FILE)
-            if current_legends_mtime > last_legends_load_time:
-                print(f"Wykryto zmiany w {LEGENDS_FILE}. Przeładowuję dane legend...")
-                all_legends_data = load_legends_data()
-                last_legends_load_time = current_legends_mtime
-        else:
-            await interaction.response.send_message(
-                "Wystąpił błąd: brak danych o legendach. Skontaktuj się z administratorem.",
-                ephemeral=True
-            )
-            return
-
+        file_path = DRIVERS_FILE
+        last_load_time = last_drivers_load_time
+    elif typ == "legend":
         available_data = all_legends_data
         title_text = "Lista zawartości paczki Legend"
-    else:  # mistrzow
-        # Przeładowanie danych mistrzów, jeśli plik uległ zmianie
-        if os.path.exists(MISTRZOW_FILE):
-            current_mistrzow_mtime = os.path.getmtime(MISTRZOW_FILE)
-            if current_mistrzow_mtime > last_mistrzow_load_time:
-                print(f"Wykryto zmiany w {MISTRZOW_FILE}. Przeładowuję dane mistrzów...")
-                all_mistrzow_data = load_mistrzow_data()
-                last_mistrzow_load_time = current_mistrzow_mtime
-        else:
-            await interaction.response.send_message(
-                "Wystąpił błąd: brak danych o mistrzach. Skontaktuj się z administratorem.",
-                ephemeral=True
-            )
-            return
-
+        file_path = LEGENDS_FILE
+        last_load_time = last_legends_load_time
+    elif typ == "mistrzowie":
         available_data = all_mistrzow_data
         title_text = "Lista zawartości paczki Mistrzów"
+        file_path = MISTRZOW_FILE
+        last_load_time = last_mistrzow_load_time
 
-    if not available_data:
+    # Przeładowanie danych, jeśli plik uległ zmianie
+    if os.path.exists(file_path):
+        current_mtime = os.path.getmtime(file_path)
+        if current_mtime > last_load_time:
+            print(f"Wykryto zmiany w {file_path}. Przeładowuję dane...")
+            if typ == "kierowcy":
+                available_data = load_drivers_data()
+                last_drivers_load_time = current_mtime
+            elif typ == "legend":
+                available_data = load_legends_data()
+                last_legends_load_time = current_mtime
+            elif typ == "mistrzowie":
+                available_data = load_mistrzow_data()
+                last_mistrzow_load_time = current_mtime
+    else:
         await interaction.response.send_message(
-            f"Brak dostępnych kart do wyświetlenia. Skontaktuj się z administratorem.",
+            f"Wystąpił błąd: brak danych dla typu '{typ}'. Skontaktuj się z administratorem.",
             ephemeral=True
         )
         return
 
-    # Sortowanie kierowców/legend/mistrzów malejąco po ocenie ogólnej
+    if not available_data:
+        await interaction.response.send_message(
+            f"Brak dostępnych kart do wyświetlenia dla typu '{typ}'. Skontaktuj się z administratorem.",
+            ephemeral=True
+        )
+        return
+
+    # Sortowanie danych malejąco po ocenie ogólnej
     sorted_data = sorted(available_data, key=lambda d: d.get('ocena_ogolna', 0), reverse=True)
 
     # Tworzenie listy do opisu embeda
@@ -1662,7 +1652,7 @@ async def lista_paczka_command(interaction: discord.Interaction, typ: str):
     embed = discord.Embed(
         title=title_text,
         description=description_text,
-        color=hex_color("#FFFFFF")
+        color=0xFFFFFF  # Użyj wartości dziesiętnej dla koloru
     )
     
     embed.set_footer(text="Official Polish Racing Fortnite")
